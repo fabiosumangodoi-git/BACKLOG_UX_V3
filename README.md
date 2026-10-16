@@ -19,10 +19,6 @@ Alternativa: `npx vercel` dentro da pasta.
 ## Teste local
 `npx serve .` e abra o endereço. Sem `config.js` preenchido, funciona em modo local (localStorage).
 
-## Login
-O site exige e-mail e senha quando o Supabase está configurado.
-1. Authentication > Providers > Email: desative **Allow new users to sign up** (e, se quiser, "Confirm email").
-2. Authentication > Users > **Add user**: crie cada pessoa da equipe com e-mail e senha.
-
-As policies (RLS) permitem leitura/escrita apenas para usuários autenticados.
-Se você já tinha rodado o schema antigo, apague as policies `initiatives_*` e rode o `schema.sql` de novo.
+## Acesso Direto (Sem Login)
+O site abre diretamente sem exigir e-mail ou senha.
+As policies (RLS) no `supabase/schema.sql` foram configuradas para leitura e gravação diretas. Se você já tinha rodado as policies antigas que exigiam autenticação, basta rodar o `supabase/schema.sql` novamente no SQL Editor do Supabase.
