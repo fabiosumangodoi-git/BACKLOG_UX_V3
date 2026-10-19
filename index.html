@@ -7013,7 +7013,10 @@
           text: c.text || "",
           createdAt: c.createdAt || formatNow(),
           updatedAt: c.updatedAt || null,
-          isSystem: Boolean(c.isSystem)
+          isSystem: Boolean(c.isSystem),
+          author: c.author || "",
+          auditKey: c.auditKey || "",
+          ts: typeof c.ts === "number" ? c.ts : 0
         };
       });
     }
@@ -7065,6 +7068,7 @@
         problemSolved: raw.problemSolved || "",
         achievedResult: raw.achievedResult || "",
         deprioritizedReason: raw.deprioritizedReason || "",
+        macrotemas: Boolean(raw.macrotemas),
         position: typeof raw.position === "number" ? raw.position : idx
       };
     }
@@ -7620,7 +7624,8 @@
     // ==========================================
     // COMPONENTE PRINCIPAL: BOARD (TODOS + DASHBOARD)
     // ==========================================
-    function Board({ onSignOut }) {
+    function Board({ onSignOut, currentUser }) {
+      const userName = currentUser || "Sistema";
       const [items, setItems] = useState(sb ? [] : loadLocal);
       const [syncState, setSyncState] = useState(sb ? "connecting" : "local");
       const [activeTab, setActiveTab] = useState("Todos"); // 'Todos' | 'Dashboard'
@@ -7903,15 +7908,85 @@
         }
       };
 
-      // Atualiza múltiplos campos de um card e salva automaticamente
+      // Auditoria: rótulos dos campos e geração automática de entradas no Histórico
+      const AUDIT_LABELS = {
+        title: "Título", jira: "Sigla Jira", jiraUrl: "Link do Jira", description: "Detalhamento",
+        problemSolved: "Resumo Executivo", whatToMeasure: "Hipótese / O que medir",
+        achievedResult: "Resultado alcançado", deprioritizedReason: "Motivo da despriorização",
+        pi: "PI", brand: "Marca", type: "Classificação", stream: "Tipo de Atuação",
+        status: "Status", piUp: "PI Conclusão UP", piDown: "PI Conclusão DOWN",
+        productionDate: "Data em Produção", owners: "Owners", journeys: "Jornadas", metrics: "Métricas",
+        macrotemas: "Macrotemas"
+      };
+      const AUDIT_LONG_FIELDS = ["title", "jira", "jiraUrl", "description", "problemSolved", "whatToMeasure", "achievedResult", "deprioritizedReason"];
+
+      const buildAuditText = (item, patch) => {
+        const parts = [];
+        Object.keys(patch).forEach(k => {
+          const label = AUDIT_LABELS[k];
+          if (!label) return;
+          const before = item[k];
+          const after = patch[k];
+          if (JSON.stringify(before) === JSON.stringify(after)) return;
+          if (k === "macrotemas") {
+            parts.push(after ? 'Marcou "Macrotemas"' : 'Desmarcou "Macrotemas"');
+          } else if (AUDIT_LONG_FIELDS.includes(k)) {
+            parts.push(`Editou ${label}`);
+          } else if (Array.isArray(after)) {
+            parts.push(`Atualizou ${label}`);
+          } else {
+            parts.push(`Alterou ${label}: "${before || "-"}" → "${after || "-"}"`);
+          }
+        });
+        return parts.join("; ");
+      };
+
+      // Atualiza múltiplos campos de um card e salva automaticamente (com registro de auditoria)
       const updateItemFields = (id, patch, immediate = false) => {
         setItems(prev => {
-          const next = prev.map(item => (item.id === id ? { ...item, ...patch } : item));
+          const next = prev.map(item => {
+            if (item.id !== id) return item;
+            let merged = { ...item, ...patch };
+            if (!Object.prototype.hasOwnProperty.call(patch, "comments")) {
+              const text = buildAuditText(item, patch);
+              if (text) {
+                const list = item.comments || [];
+                const first = list[0];
+                const now = Date.now();
+                if (first && first.isSystem && first.author === userName && first.auditKey === text && now - (first.ts || 0) < 120000) {
+                  merged.comments = [{ ...first, createdAt: formatNow(), ts: now }, ...list.slice(1)];
+                } else {
+                  merged.comments = [{
+                    id: `aud-${now}-${Math.random().toString(36).slice(2, 6)}`,
+                    text,
+                    createdAt: formatNow(),
+                    updatedAt: null,
+                    isSystem: true,
+                    author: userName,
+                    auditKey: text,
+                    ts: now
+                  }, ...list];
+                }
+              }
+            }
+            return merged;
+          });
           itemsRef.current = next;
           return next;
         });
         persist(id, immediate);
       };
+
+      const makeAuditEntry = (text) => ({
+        id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        text,
+        createdAt: formatNow(),
+        updatedAt: null,
+        isSystem: true,
+        author: userName,
+        auditKey: "",
+        ts: Date.now()
+      });
 
       const updateItemField = (id, field, value, immediate = false) => {
         if (field === "pi") {
@@ -7935,10 +8010,13 @@
         const timestamp = formatNow();
         const autoLog = {
           id: `mov-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          text: `Card movimentado de "${originStatus}" para "${targetStatus}"`,
+          text: `Moveu o card de "${originStatus}" para "${targetStatus}"`,
           createdAt: timestamp,
           updatedAt: null,
-          isSystem: true
+          isSystem: true,
+          author: userName,
+          auditKey: "",
+          ts: Date.now()
         };
         const updatedComments = [autoLog, ...(current.comments || [])];
         const savedPrevPi = PI_CYCLE_OPTIONS.includes(current.pi)
@@ -7988,7 +8066,10 @@
           text: newComment.trim(),
           createdAt: formatNow(),
           updatedAt: null,
-          isSystem: false
+          isSystem: false,
+          author: userName,
+          auditKey: "",
+          ts: Date.now()
         };
         const updatedComments = [commentObj, ...(selectedItem.comments || [])];
         updateItemField(selectedItem.id, "comments", updatedComments, true);
@@ -8002,11 +8083,12 @@
 
       const handleSaveEditComment = (commentId) => {
         if (!selectedItem || !editingCommentText.trim()) return;
-        const updatedComments = (selectedItem.comments || []).map(c =>
+        const mapped = (selectedItem.comments || []).map(c =>
           c.id === commentId
             ? { ...c, text: editingCommentText.trim(), updatedAt: formatNow() }
             : c
         );
+        const updatedComments = [makeAuditEntry("Editou uma observação"), ...mapped];
         updateItemField(selectedItem.id, "comments", updatedComments, true);
         setEditingCommentId(null);
         setEditingCommentText("");
@@ -8014,7 +8096,10 @@
 
       const handleDeleteComment = (commentId) => {
         if (!selectedItem) return;
-        const updatedComments = (selectedItem.comments || []).filter(c => c.id !== commentId);
+        const updatedComments = [
+          makeAuditEntry("Excluiu uma observação"),
+          ...(selectedItem.comments || []).filter(c => c.id !== commentId)
+        ];
         updateItemField(selectedItem.id, "comments", updatedComments, true);
       };
 
@@ -8098,10 +8183,13 @@
           comments: [
             {
               id: `c-init-${Date.now()}`,
-              text: `Card criado na coluna "${newCard.status}"`,
+              text: `Criou o card na coluna "${newCard.status}"`,
               createdAt: nowStr,
               updatedAt: null,
-              isSystem: true
+              isSystem: true,
+              author: userName,
+              auditKey: "",
+              ts: Date.now()
             }
           ],
           journeys: newCard.journeys,
@@ -8220,13 +8308,19 @@
                   <MIcon name="add" className="text-[16px]" />
                   <span>Nova Iniciativa</span>
                 </button>
+                {currentUser && (
+                  <span className="text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 px-3 py-2.5 rounded-xl flex items-center gap-1.5">
+                    <MIcon name="account_circle" className="text-[16px]" />
+                    <span>Logado: {currentUser}</span>
+                  </span>
+                )}
                 {onSignOut && (
                   <button
                     onClick={onSignOut}
                     className="text-xs font-semibold text-slate-600 hover:text-slate-900 px-3 py-2.5 rounded-xl border border-slate-200 bg-white flex items-center gap-1"
                   >
                     <MIcon name="logout" className="text-[15px]" />
-                    <span>Sair</span>
+                    <span>Trocar usuário / Sair</span>
                   </button>
                 )}
               </div>
@@ -8416,6 +8510,21 @@
                                 draggedItemId === item.id ? "opacity-40 border-indigo-400" : "border-slate-200"
                               }`}
                             >
+                              {/* Checkbox Macrotemas (topo absoluto do card) */}
+                              <label
+                                onClick={e => e.stopPropagation()}
+                                className="flex items-center gap-1.5 mb-2 text-[11px] font-bold text-slate-600 cursor-pointer select-none w-fit"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(item.macrotemas)}
+                                  onClick={e => e.stopPropagation()}
+                                  onChange={e => updateItemField(item.id, "macrotemas", e.target.checked, true)}
+                                  className="w-3.5 h-3.5 rounded border-slate-300 accent-indigo-600 cursor-pointer"
+                                />
+                                <span>Macrotemas</span>
+                              </label>
+
                               {/* Topo do Card: Jira + Tag de PI (ou Backlog quando na coluna Backlog) + Atuação + Owners */}
                               <div className="flex items-center justify-between gap-1.5 mb-2">
                                 <div className="flex flex-wrap items-center gap-1">
@@ -8558,6 +8667,17 @@
                       </button>
                     </div>
                   </div>
+
+                  {/* Checkbox Macrotemas */}
+                  <label className="flex items-center gap-2 mb-2 text-xs font-bold text-slate-700 cursor-pointer select-none w-fit">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedItem.macrotemas)}
+                      onChange={e => updateItemField(selectedItem.id, "macrotemas", e.target.checked, true)}
+                      className="w-4 h-4 rounded border-slate-300 accent-indigo-600 cursor-pointer"
+                    />
+                    <span>Macrotemas</span>
+                  </label>
 
                   {/* Título editável */}
                   <input
@@ -8897,10 +9017,15 @@
                                   <div className="flex items-center gap-2">
                                     <span className={`w-2 h-2 rounded-full ${comment.isSystem ? "bg-indigo-500" : "bg-slate-700"}`}></span>
                                     <span className="text-[11px] font-bold text-slate-600">
-                                      {comment.isSystem ? "Movimentação Automática" : "Comentário"}
+                                      {comment.isSystem ? "Histórico" : "Comentário"}
                                     </span>
+                                    {comment.author && (
+                                      <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded">
+                                        {comment.author}
+                                      </span>
+                                    )}
                                     <span className="text-[10px] text-slate-400">
-                                      • Publicado em {comment.createdAt}
+                                      • {comment.createdAt}
                                     </span>
                                     {comment.updatedAt && (
                                       <span className="text-[10px] text-amber-600 font-medium">
@@ -9295,10 +9420,99 @@
     }
 
     // ==========================================
-    // APP ROOT (ACESSO DIRETO SEM LOGIN)
+    // LOGIN POR SELEÇÃO DE NOME + SENHA PADRÃO
+    // ==========================================
+    const USERS = ["Carlos", "Fábio", "Jefferson", "Murillo", "Paulo"];
+    const APP_PASSWORD = "adbacklogux";
+    const USER_KEY = "ad_ux_ops_user";
+
+    function LoginScreen({ onLogin }) {
+      const [name, setName] = useState("");
+      const [password, setPassword] = useState("");
+      const [error, setError] = useState("");
+
+      const submit = e => {
+        e.preventDefault();
+        if (!USERS.includes(name)) {
+          setError("Selecione o seu nome.");
+          return;
+        }
+        if (password !== APP_PASSWORD) {
+          setError("Senha incorreta.");
+          return;
+        }
+        onLogin(name);
+      };
+
+      return (
+        <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
+          <form onSubmit={submit} className="bg-white border border-slate-200 rounded-2xl p-7 w-full max-w-sm shadow-lg">
+            <div className="w-12 h-12 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-bold text-lg shadow-sm shadow-indigo-200 mb-4">AD</div>
+            <h1 className="text-lg font-bold text-slate-900">UX Ops &amp; Backlog Hub</h1>
+            <p className="text-xs text-slate-500 mb-5">Selecione seu nome e informe a senha para entrar.</p>
+
+            <label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">Usuário</label>
+            <div className="flex flex-wrap gap-1.5 mb-4">
+              {USERS.map(u => (
+                <button
+                  key={u}
+                  type="button"
+                  onClick={() => { setName(u); setError(""); }}
+                  className={`px-3 py-1.5 rounded-full text-xs font-bold border transition ${
+                    name === u
+                      ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
+                      : "bg-white text-slate-600 border-slate-200 hover:border-indigo-300 hover:text-indigo-600"
+                  }`}
+                >
+                  {u}
+                </button>
+              ))}
+            </div>
+
+            <label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">Senha</label>
+            <input
+              type="password"
+              value={password}
+              onChange={e => { setPassword(e.target.value); setError(""); }}
+              className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 focus:outline-none focus:border-indigo-500"
+              placeholder="Senha de acesso"
+              autoFocus
+            />
+            {error && <p className="text-xs text-rose-600 mt-2">{error}</p>}
+
+            <button
+              type="submit"
+              className="w-full mt-5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold py-2.5 rounded-xl shadow-sm transition"
+            >
+              Entrar
+            </button>
+          </form>
+        </div>
+      );
+    }
+
+    // ==========================================
+    // APP ROOT
     // ==========================================
     function App() {
-      return <Board />;
+      const [user, setUser] = useState(() => {
+        try {
+          const saved = localStorage.getItem(USER_KEY);
+          return USERS.includes(saved) ? saved : null;
+        } catch (e) { return null; }
+      });
+
+      const login = name => {
+        try { localStorage.setItem(USER_KEY, name); } catch (e) {}
+        setUser(name);
+      };
+      const logout = () => {
+        try { localStorage.removeItem(USER_KEY); } catch (e) {}
+        setUser(null);
+      };
+
+      if (!user) return <LoginScreen onLogin={login} />;
+      return <Board key={user} currentUser={user} onSignOut={logout} />;
     }
 
     const root = ReactDOM.createRoot(document.getElementById("root"));
