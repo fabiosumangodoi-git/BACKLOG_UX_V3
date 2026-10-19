@@ -7083,19 +7083,21 @@
       ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY)
       : null;
     const LOCAL_KEY = "ad_ux_ops_items_v4";
-    const SEED_VERSION_KEY = "ad_ux_ops_seed_v4";
 
     function loadLocal() {
-      try {
-        const raw = localStorage.getItem(LOCAL_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            return parsed.map((d, i) => normalizeItem(d, i));
+      const candidateKeys = [LOCAL_KEY, "ad_ux_ops_items_v3", "ad_ux_ops_items"];
+      for (const k of candidateKeys) {
+        try {
+          const raw = localStorage.getItem(k);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              return parsed.map((d, i) => normalizeItem(d, i));
+            }
           }
+        } catch (e) {
+          console.warn(`Falha ao ler localStorage (${k}):`, e);
         }
-      } catch (e) {
-        console.warn("Falha ao ler localStorage:", e);
       }
       const seeded = INITIAL_DATA.map((d, i) => normalizeItem(d, i));
       try {
@@ -7683,54 +7685,170 @@
         }
       }, [items]);
 
-      // Modo online (Supabase): carga inicial, seed automático e Realtime
+      // Modo online (Supabase): carga inicial, sincronização e Realtime
       useEffect(() => {
-        if (!sb) return;
+        if (!sb) {
+          setSyncState("local");
+          setItems(loadLocal());
+          return;
+        }
+
         let channel;
-        (async () => {
-          const { data, error } = await sb.from("initiatives").select("id,data,position").order("position");
+
+        const initSupabase = async () => {
+          setSyncState("connecting");
+          // 2. Busca SEMPRE todos os registros da tabela public.initiatives do Supabase ordenados por position
+          const { data, error } = await sb
+            .from("initiatives")
+            .select("*")
+            .order("position", { ascending: true });
+
           if (error) {
-            console.error(error);
+            console.error("Erro ao carregar iniciativas do Supabase:", error);
             setSyncState("error");
-            setItems(loadLocal());
+            const fallbackLocal = loadLocal();
+            setItems(fallbackLocal);
+            itemsRef.current = fallbackLocal;
             return;
           }
-          const alreadySeededV4 = localStorage.getItem(SEED_VERSION_KEY) === "1";
-          if (data.length === 0 || !alreadySeededV4) {
-            const seeded = INITIAL_DATA.map((d, i) => normalizeItem(d, i));
-            await sb.from("initiatives").upsert(
-              seeded.map(d => ({ id: d.id, data: d, position: d.position })),
-              { onConflict: "id" }
-            );
-            localStorage.setItem(SEED_VERSION_KEY, "1");
-            localStorage.setItem(LOCAL_KEY, JSON.stringify(seeded));
-            setItems(seeded);
-          } else {
-            const normalized = data.map((r, idx) => normalizeItem({ ...r.data, id: r.id, position: r.position }, idx));
-            setItems(normalized);
-          }
-          setSyncState("online");
 
-          channel = sb
-            .channel("initiatives-rt")
-            .on("postgres_changes", { event: "*", schema: "public", table: "initiatives" }, payload => {
-              if (payload.eventType === "DELETE") {
-                setItems(prev => prev.filter(i => i.id !== payload.old.id));
-                return;
+          // Se a tabela public.initiatives já possuir dados, substitui o cache do localStorage
+          if (data && data.length > 0) {
+            const normalized = data.map((r, idx) =>
+              normalizeItem(
+                { ...r.data, id: String(r.id), position: typeof r.position === "number" ? r.position : idx },
+                idx
+              )
+            );
+            try {
+              localStorage.setItem(LOCAL_KEY, JSON.stringify(normalized));
+            } catch (e) {
+              console.warn("Falha ao salvar cache no localStorage:", e);
+            }
+            setItems(normalized);
+            itemsRef.current = normalized;
+            setSyncState("online");
+          } else {
+            // 3. Se a tabela estiver vazia no Supabase, faz upsert automático dos cards do localStorage
+            const localCards = loadLocal();
+            if (localCards.length > 0) {
+              setSyncState("saving");
+              const rowsToUpsert = localCards.map((card, idx) => ({
+                id: String(card.id),
+                data: card,
+                position: typeof card.position === "number" ? card.position : idx,
+                updated_at: new Date().toISOString()
+              }));
+
+              const { error: upsertErr } = await sb
+                .from("initiatives")
+                .upsert(rowsToUpsert, { onConflict: "id" });
+
+              if (upsertErr) {
+                console.error("Erro ao sincronizar cards locais para o Supabase:", upsertErr);
+                setSyncState("error");
+              } else {
+                setSyncState("online");
               }
-              const row = payload.new;
-              if (timers.current[row.id]) return;
-              const item = normalizeItem({ ...row.data, id: row.id, position: row.position });
-              setItems(prev =>
-                prev.some(i => i.id === row.id)
-                  ? prev.map(i => (i.id === row.id ? item : i))
-                  : [item, ...prev]
-              );
-            })
-            .subscribe();
-        })();
-        return () => { if (channel) sb.removeChannel(channel); };
+              setItems(localCards);
+              itemsRef.current = localCards;
+              try {
+                localStorage.setItem(LOCAL_KEY, JSON.stringify(localCards));
+              } catch (e) {}
+            } else {
+              setItems([]);
+              itemsRef.current = [];
+              setSyncState("online");
+            }
+          }
+
+          // 5. Inscrição Realtime na tabela public.initiatives
+          try {
+            channel = sb
+              .channel("initiatives-realtime")
+              .on(
+                "postgres_changes",
+                { event: "*", schema: "public", table: "initiatives" },
+                payload => {
+                  if (payload.eventType === "DELETE") {
+                    const deletedId = String(payload.old?.id || "");
+                    if (!deletedId) return;
+                    setItems(prev => {
+                      const next = prev.filter(i => String(i.id) !== deletedId);
+                      itemsRef.current = next;
+                      try {
+                        localStorage.setItem(LOCAL_KEY, JSON.stringify(next));
+                      } catch (e) {}
+                      return next;
+                    });
+                    return;
+                  }
+
+                  const row = payload.new;
+                  if (!row || !row.id) return;
+                  const rowId = String(row.id);
+
+                  // Evita sobrescrever card se o usuário local estiver digitando nele com debounce ativo
+                  if (timers.current[rowId]) return;
+
+                  const item = normalizeItem({
+                    ...row.data,
+                    id: rowId,
+                    position: typeof row.position === "number" ? row.position : 0
+                  });
+
+                  setItems(prev => {
+                    const exists = prev.some(i => String(i.id) === rowId);
+                    const next = exists
+                      ? prev.map(i => (String(i.id) === rowId ? item : i))
+                      : [item, ...prev];
+                    next.sort((a, b) => (Number(a.position) || 0) - (Number(b.position) || 0));
+                    itemsRef.current = next;
+                    try {
+                      localStorage.setItem(LOCAL_KEY, JSON.stringify(next));
+                    } catch (e) {}
+                    return next;
+                  });
+                }
+              )
+              .subscribe((status, err) => {
+                if (err) console.warn("Aviso na inscrição Realtime:", err);
+              });
+          } catch (rtErr) {
+            console.warn("Falha ao configurar canal Realtime:", rtErr);
+          }
+        };
+
+        initSupabase();
+
+        return () => {
+          if (channel) {
+            sb.removeChannel(channel);
+          }
+        };
       }, []);
+
+      // Salva imediatamente um card no Supabase (colunas: id, data, position, updated_at)
+      const saveCardToSupabase = async (item) => {
+        if (!item || !item.id) return;
+        try {
+          localStorage.setItem(LOCAL_KEY, JSON.stringify(itemsRef.current));
+        } catch (e) {}
+        if (!sb) return;
+        setSyncState("saving");
+        const { error } = await sb.from("initiatives").upsert({
+          id: String(item.id),
+          data: item,
+          position: typeof item.position === "number" ? item.position : 0,
+          updated_at: new Date().toISOString()
+        }, { onConflict: "id" });
+        if (error) {
+          console.error("Erro ao salvar iniciativa no Supabase:", error);
+          setSyncState("error");
+        } else {
+          setSyncState("online");
+        }
+      };
 
       // Grava automaticamente no Supabase e no localStorage
       const persist = (id, immediate = false) => {
@@ -7739,46 +7857,49 @@
         } catch (e) {}
         if (!sb) return;
         clearTimeout(timers.current[id]);
-        const delay = immediate ? 50 : 350;
-        timers.current[id] = setTimeout(async () => {
+        delete timers.current[id];
+
+        const execute = async () => {
           delete timers.current[id];
-          const latest = itemsRef.current.find(i => i.id === id);
+          const latest = itemsRef.current.find(i => String(i.id) === String(id));
           if (!latest) return;
-          setSyncState("saving");
-          const { error } = await sb.from("initiatives").upsert({
-            id: latest.id,
-            data: latest,
-            position: latest.position ?? 0,
-            updated_at: new Date().toISOString()
-          });
-          if (error) console.error(error);
-          setSyncState(error ? "error" : "online");
-        }, delay);
+          await saveCardToSupabase(latest);
+        };
+
+        if (immediate) {
+          execute();
+        } else {
+          timers.current[id] = setTimeout(execute, 300);
+        }
       };
 
       // Exclui permanentemente um item já criado (localStorage + Supabase)
       const confirmDeleteItem = async () => {
         if (!itemToDelete) return;
-        const id = itemToDelete.id;
+        const id = String(itemToDelete.id);
         clearTimeout(timers.current[id]);
         delete timers.current[id];
         setItems(prev => {
-          const next = prev.filter(item => item.id !== id);
+          const next = prev.filter(item => String(item.id) !== id);
           itemsRef.current = next;
           try {
             localStorage.setItem(LOCAL_KEY, JSON.stringify(next));
           } catch (e) {}
           return next;
         });
-        if (selectedId === id) {
+        if (String(selectedId) === id) {
           setSelectedId(null);
         }
         setItemToDelete(null);
         if (sb) {
           setSyncState("saving");
           const { error } = await sb.from("initiatives").delete().eq("id", id);
-          if (error) console.error(error);
-          setSyncState(error ? "error" : "online");
+          if (error) {
+            console.error("Erro ao excluir iniciativa do Supabase:", error);
+            setSyncState("error");
+          } else {
+            setSyncState("online");
+          }
         }
       };
 
@@ -7990,9 +8111,12 @@
         setItems(prev => {
           const next = [created, ...prev];
           itemsRef.current = next;
+          try {
+            localStorage.setItem(LOCAL_KEY, JSON.stringify(next));
+          } catch (e) {}
           return next;
         });
-        persist(created.id, true);
+        saveCardToSupabase(created);
         setIsNewModalOpen(false);
         setNewCard({
           jira: "AGDE-",
@@ -8440,6 +8564,7 @@
                     type="text"
                     value={selectedItem.title}
                     onChange={e => updateItemField(selectedItem.id, "title", e.target.value)}
+                    onBlur={() => persist(selectedItem.id, true)}
                     className="w-full text-base font-bold text-slate-900 leading-snug bg-transparent border-b border-transparent hover:border-slate-200 focus:border-indigo-500 focus:outline-none pb-1"
                   />
 
@@ -8455,6 +8580,7 @@
                           type="text"
                           value={selectedItem.jira || ""}
                           onChange={e => updateItemField(selectedItem.id, "jira", e.target.value.toUpperCase())}
+                          onBlur={() => persist(selectedItem.id, true)}
                           className="w-24 text-[11px] font-bold text-indigo-700 bg-white border border-indigo-200 rounded px-1.5 py-0.5"
                         />
                       </div>
@@ -8464,6 +8590,7 @@
                       placeholder="Cole aqui a URL do Jira (ex: https://.../browse/AGDE-4220)"
                       value={selectedItem.jiraUrl || ""}
                       onChange={e => handleJiraUrl(selectedItem.id, e.target.value)}
+                      onBlur={() => persist(selectedItem.id, true)}
                       className="w-full text-xs bg-white border border-indigo-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500"
                     />
                   </div>
@@ -8641,6 +8768,7 @@
                           rows={4}
                           value={selectedItem.description}
                           onChange={e => updateItemField(selectedItem.id, "description", e.target.value)}
+                          onBlur={() => persist(selectedItem.id, true)}
                           className="w-full text-xs leading-relaxed text-slate-700 bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-indigo-500"
                         />
                       </div>
@@ -8719,6 +8847,7 @@
                             rows={2}
                             value={selectedItem.deprioritizedReason || ""}
                             onChange={e => updateItemField(selectedItem.id, "deprioritizedReason", e.target.value)}
+                            onBlur={() => persist(selectedItem.id, true)}
                             placeholder="Descreva o motivo estratégico da despriorização..."
                             className="w-full text-xs text-rose-900 bg-white border border-rose-200 rounded-lg p-2.5 focus:outline-none"
                           />
@@ -8900,6 +9029,7 @@
                           placeholder="Descreva o impacto real para o paciente ou negócio..."
                           value={selectedItem.problemSolved || ""}
                           onChange={e => updateItemField(selectedItem.id, "problemSolved", e.target.value)}
+                          onBlur={() => persist(selectedItem.id, true)}
                           className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-indigo-500"
                         />
                       </div>
@@ -8913,6 +9043,7 @@
                           placeholder="Ex: Taxa de sucesso na busca de unidades e avanço para Dia/Hora..."
                           value={selectedItem.whatToMeasure || ""}
                           onChange={e => updateItemField(selectedItem.id, "whatToMeasure", e.target.value)}
+                          onBlur={() => persist(selectedItem.id, true)}
                           className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-indigo-500"
                         />
                       </div>
@@ -8926,6 +9057,7 @@
                           placeholder="Ex: Aumento de +4.2% na conversão da etapa de unidades no VWO..."
                           value={selectedItem.achievedResult || ""}
                           onChange={e => updateItemField(selectedItem.id, "achievedResult", e.target.value)}
+                          onBlur={() => persist(selectedItem.id, true)}
                           className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-indigo-500"
                         />
                       </div>
