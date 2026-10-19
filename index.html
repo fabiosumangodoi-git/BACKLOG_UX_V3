@@ -7651,6 +7651,10 @@
       const [itemToDelete, setItemToDelete] = useState(null);
 
       const timers = useRef({});
+      // Controle de eco do Realtime: gravações em andamento e carimbos já enviados por este cliente
+      const pendingWrites = useRef({});
+      const sentStamps = useRef({});
+      const lastLocalWrite = useRef(0);
       const itemsRef = useRef(items);
       useEffect(() => { itemsRef.current = items; }, [items]);
 
@@ -7770,7 +7774,7 @@
           // 5. Inscrição Realtime na tabela public.initiatives
           try {
             channel = sb
-              .channel("initiatives-realtime")
+              .channel("initiatives-sync")
               .on(
                 "postgres_changes",
                 { event: "*", schema: "public", table: "initiatives" },
@@ -7795,6 +7799,10 @@
 
                   // Evita sobrescrever card se o usuário local estiver digitando nele com debounce ativo
                   if (timers.current[rowId]) return;
+
+                  // Ignora o "eco" das nossas próprias gravações (pode chegar atrasado e reverter o estado local)
+                  if (pendingWrites.current[rowId] > 0) return;
+                  if (row.updated_at && sentStamps.current[rowId] && sentStamps.current[rowId].has(row.updated_at)) return;
 
                   const item = normalizeItem({
                     ...row.data,
@@ -7833,6 +7841,35 @@
         };
       }, []);
 
+      // Polling de segurança (5s): garante que alterações de colegas apareçam mesmo se o Realtime falhar.
+      // Pula o ciclo se houver edição ativa, gravação pendente ou escrita local durante a leitura.
+      useEffect(() => {
+        if (!sb) return;
+        let cancelled = false;
+        const tick = async () => {
+          const ae = document.activeElement;
+          const editing = ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA") && ae.type !== "checkbox";
+          const busy = Object.keys(timers.current).length > 0 ||
+            Object.values(pendingWrites.current).some(n => n > 0);
+          if (editing || busy) return;
+          const startedAt = Date.now();
+          const { data, error } = await sb.from("initiatives").select("*").order("position", { ascending: true });
+          if (cancelled || error || !data || data.length === 0) return;
+          // Descarta leitura obsoleta se houve escrita local durante a consulta
+          if (lastLocalWrite.current >= startedAt - 1000) return;
+          const remote = data.map((r, idx) =>
+            normalizeItem({ ...r.data, id: String(r.id), position: typeof r.position === "number" ? r.position : idx }, idx)
+          );
+          const local = itemsRef.current;
+          if (JSON.stringify(local) === JSON.stringify(remote)) return;
+          itemsRef.current = remote;
+          setItems(remote);
+          try { localStorage.setItem(LOCAL_KEY, JSON.stringify(remote)); } catch (e) {}
+        };
+        const iv = setInterval(tick, 5000);
+        return () => { cancelled = true; clearInterval(iv); };
+      }, []);
+
       // Salva imediatamente um card no Supabase (colunas: id, data, position, updated_at)
       const saveCardToSupabase = async (item) => {
         if (!item || !item.id) return;
@@ -7840,13 +7877,23 @@
           localStorage.setItem(LOCAL_KEY, JSON.stringify(itemsRef.current));
         } catch (e) {}
         if (!sb) return;
+        const sid = String(item.id);
+        lastLocalWrite.current = Date.now();
+        const stamp = new Date().toISOString();
+        if (!sentStamps.current[sid]) sentStamps.current[sid] = new Set();
+        sentStamps.current[sid].add(stamp);
+        pendingWrites.current[sid] = (pendingWrites.current[sid] || 0) + 1;
         setSyncState("saving");
         const { error } = await sb.from("initiatives").upsert({
-          id: String(item.id),
+          id: sid,
           data: item,
           position: typeof item.position === "number" ? item.position : 0,
-          updated_at: new Date().toISOString()
+          updated_at: stamp
         }, { onConflict: "id" });
+        // Mantém o bloqueio por um instante para cobrir o eco que chega logo após a resposta
+        setTimeout(() => {
+          pendingWrites.current[sid] = Math.max(0, (pendingWrites.current[sid] || 1) - 1);
+        }, 800);
         if (error) {
           console.error("Erro ao salvar iniciativa no Supabase:", error);
           setSyncState("error");
@@ -7882,6 +7929,7 @@
       const confirmDeleteItem = async () => {
         if (!itemToDelete) return;
         const id = String(itemToDelete.id);
+        lastLocalWrite.current = Date.now();
         clearTimeout(timers.current[id]);
         delete timers.current[id];
         setItems(prev => {
@@ -8519,7 +8567,10 @@
                                   type="checkbox"
                                   checked={Boolean(item.macrotemas)}
                                   onClick={e => e.stopPropagation()}
-                                  onChange={e => updateItemField(item.id, "macrotemas", e.target.checked, true)}
+                                  onChange={e => {
+                                    e.stopPropagation();
+                                    updateItemField(item.id, "macrotemas", e.target.checked, true);
+                                  }}
                                   className="w-3.5 h-3.5 rounded border-slate-300 accent-indigo-600 cursor-pointer"
                                 />
                                 <span>Macrotemas</span>
