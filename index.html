@@ -7083,7 +7083,8 @@
       return PLANNING_LOCKED_STATUSES.includes(status);
     }
     function isDoneStatus(status) {
-      return DONE_STATUSES.includes(status);
+      const s = String(status || "").trim().toLowerCase();
+      return s === "concluído" || s === "concluido" || s === "concluídos" || s === "concluidos" || s === "done";
     }
 
     // Semáforo de prazo: diferença em dias corridos entre endDate e hoje (ambos às 00:00:00)
@@ -7115,10 +7116,11 @@
       const pi = PI_OPTIONS.includes(parsedPi)
         ? parsedPi
         : (status === "Backlog" ? "Backlog" : previousPi);
-      const piUp = raw.piUp ? normalizePI(raw.piUp) : "";
-      const piDown = raw.piDown ? normalizePI(raw.piDown) : "";
+      const piUp = normalizePI(raw.piConclusaoUp || raw.piUp || "");
+      const piDown = normalizePI(raw.piConclusaoDown || raw.piDown || "");
       const jiraNum = extractJiraNumber(raw.jira) || extractJiraNumber(parseJiraCode(raw.jiraUrl));
-      const productionDate = normalizeDateToISO(raw.productionDate || raw.dataProducao);
+      const productionDate = normalizeDateToISO(raw.dataProducao || raw.productionDate);
+      const acompanhaDados = ["sim", "nao", "a_definir"].includes(raw.acompanhaDados) ? raw.acompanhaDados : "";
       return {
         ...raw,
         id: String(raw.id || Date.now() + idx),
@@ -7135,8 +7137,10 @@
         metrics: normalizeMetrics(raw.metrics),
         comments: normalizeComments(raw.comments, raw.id || idx),
         piUp: PI_OPTIONS.includes(piUp) ? piUp : "",
+        piConclusaoUp: PI_OPTIONS.includes(piUp) ? piUp : "",
         piDown: PI_OPTIONS.includes(piDown) ? piDown : "",
-        // Data de produção/conclusão: 100% manual (productionDate é o campo canônico; dataProducao é espelho)
+        piConclusaoDown: PI_OPTIONS.includes(piDown) ? piDown : "",
+        // Data de produção/conclusão: 100% manual (productionDate e dataProducao sincronizados)
         productionDate,
         dataProducao: productionDate,
         whatToMeasure: raw.whatToMeasure || "",
@@ -7147,7 +7151,7 @@
         startDate: normalizeDateToISO(raw.startDate),
         endDate: normalizeDateToISO(raw.endDate),
         sprints: SPRINT_OPTIONS.includes(raw.sprints) ? raw.sprints : "",
-        acompanhaDados: ACOMPANHA_LABEL[raw.acompanhaDados] ? raw.acompanhaDados : "",
+        acompanhaDados,
         position: Number.isFinite(Number(raw.position)) && raw.position !== null && raw.position !== ""
           ? Number(raw.position)
           : idx
@@ -7309,10 +7313,11 @@
       );
     }
 
-    // Hook: número de colunas do grid do repositório (1 / 2 / 3) conforme a largura da tela
+    // Hook: número de colunas do grid do repositório (1 / 2 / 3 / 4) conforme a largura da tela
     function useGridColumns() {
       const calc = () => {
         const w = typeof window !== "undefined" ? window.innerWidth : 1280;
+        if (w >= 1280) return 4;
         if (w >= 1024) return 3;
         if (w >= 768) return 2;
         return 1;
@@ -7345,24 +7350,28 @@
 
       const filtered = useMemo(() => {
         const q = repoSearch.trim().toLowerCase();
-        const list = completedItems.filter(item => {
+        const list = (completedItems || []).filter(item => {
           if (repoAcompanha !== "todos" && (item.acompanhaDados || "") !== repoAcompanha) return false;
           if (!q) return true;
+          const prodDate = item.productionDate || item.dataProducao || "";
           const haystack = [
-            item.title, item.jira, item.pi, item.piUp, item.piDown, item.description,
-            item.problemSolved, item.achievedResult, item.whatToMeasure, item.brand, item.type,
-            formatISOToBR(item.productionDate), ACOMPANHA_LABEL[item.acompanhaDados]
+            item.title, item.jira, item.pi, item.piUp, item.piConclusaoUp, item.piDown, item.piConclusaoDown,
+            item.description, item.problemSolved, item.achievedResult, item.whatToMeasure, item.brand, item.type,
+            formatISOToBR(prodDate), ACOMPANHA_LABEL[item.acompanhaDados]
           ].filter(Boolean).join(" ").toLowerCase();
           return haystack.includes(q);
         });
         // Ordena pela Data de produção/conclusão preenchida manualmente; sem data ficam agrupados no final
-        const withDate = list.filter(i => /^\d{4}-\d{2}-\d{2}$/.test(i.productionDate || ""));
-        const withoutDate = list.filter(i => !/^\d{4}-\d{2}-\d{2}$/.test(i.productionDate || ""));
-        withDate.sort((a, b) =>
-          repoSort === "newest"
-            ? b.productionDate.localeCompare(a.productionDate)
-            : a.productionDate.localeCompare(b.productionDate)
-        );
+        const getDateStr = (i) => i.productionDate || i.dataProducao || "";
+        const withDate = list.filter(i => /^\d{4}-\d{2}-\d{2}$/.test(getDateStr(i)));
+        const withoutDate = list.filter(i => !/^\d{4}-\d{2}-\d{2}$/.test(getDateStr(i)));
+        withDate.sort((a, b) => {
+          const dateA = getDateStr(a);
+          const dateB = getDateStr(b);
+          return repoSort === "newest"
+            ? dateB.localeCompare(dateA)
+            : dateA.localeCompare(dateB);
+        });
         return [...withDate, ...withoutDate];
       }, [completedItems, repoSearch, repoSort, repoAcompanha]);
 
@@ -7382,7 +7391,7 @@
               </p>
             </div>
             <span className="text-xs font-bold bg-indigo-800/90 border border-indigo-700 px-3 py-1.5 rounded-lg">
-              {completedItems.length} entregas concluídas
+              {(completedItems || []).length} entregas concluídas
             </span>
           </div>
 
@@ -7466,83 +7475,86 @@
               Nenhuma iniciativa concluída encontrada para os filtros aplicados.
             </div>
           ) : (
-            <div className="p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {pageItems.map(item => (
-                <div
-                  key={item.id}
-                  onClick={() => onOpenItem(item, "resultados")}
-                  className="bg-slate-50/70 hover:bg-white rounded-xl border border-slate-200 p-4 shadow-sm hover:shadow-md hover:border-teal-400 transition cursor-pointer flex flex-col justify-between"
-                >
-                  <div>
-                    <div className="flex items-center justify-between gap-2 mb-2">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="text-xs font-bold text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
-                          <JiraLink item={item} />
-                        </span>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${PI_COLORS[item.pi] || "bg-slate-100"}`}>
-                          {item.pi}
-                        </span>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${TYPE_BADGE[item.type] || "bg-slate-100 text-slate-600 border-slate-200"}`}>
-                          {item.type}
+            <div className="p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {pageItems.map(item => {
+                const prodDate = item.productionDate || item.dataProducao;
+                return (
+                  <div
+                    key={item.id}
+                    onClick={() => onOpenItem(item, "resultados")}
+                    className="bg-slate-50/70 hover:bg-white rounded-xl border border-slate-200 p-4 shadow-sm hover:shadow-md hover:border-teal-400 transition cursor-pointer flex flex-col justify-between"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-xs font-bold text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
+                            <JiraLink item={item} />
+                          </span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${PI_COLORS[item.pi] || "bg-slate-100"}`}>
+                            {item.pi}
+                          </span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${TYPE_BADGE[item.type] || "bg-slate-100 text-slate-600 border-slate-200"}`}>
+                            {item.type}
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-slate-500 font-medium inline-flex items-center gap-1 flex-shrink-0">
+                          {prodDate ? (
+                            <>
+                              <MIcon name="rocket_launch" className="text-[14px] text-teal-600" />
+                              <span>Prod: {formatISOToBR(prodDate)}</span>
+                            </>
+                          ) : (
+                            "Sem data"
+                          )}
                         </span>
                       </div>
-                      <span className="text-[11px] text-slate-500 font-medium inline-flex items-center gap-1 flex-shrink-0">
-                        {item.productionDate ? (
-                          <>
-                            <MIcon name="rocket_launch" className="text-[14px] text-teal-600" />
-                            <span>Prod: {formatISOToBR(item.productionDate)}</span>
-                          </>
-                        ) : (
-                          "Sem data"
-                        )}
-                      </span>
-                    </div>
 
-                    {/* Tag "Acompanha dados?" */}
-                    <div className="mb-2">
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded border inline-flex items-center gap-1 ${
-                        ACOMPANHA_BADGE[item.acompanhaDados] || "bg-slate-100 text-slate-500 border-slate-200"
-                      }`}>
-                        <MIcon name="monitoring" className="text-[12px]" />
-                        <span>Acompanha dados: {ACOMPANHA_LABEL[item.acompanhaDados] || "Não informado"}</span>
-                      </span>
-                    </div>
-
-                    <h4 className="text-xs font-bold text-slate-900 mb-2 line-clamp-2">
-                      {item.title}
-                    </h4>
-
-                    <div className="bg-white p-2.5 rounded-lg border border-slate-200/70 mb-2">
-                      <span className="text-[10px] font-bold uppercase text-slate-400 block mb-0.5">
-                        Problema Resolvido / Escopo
-                      </span>
-                      <p className="text-xs text-slate-700 line-clamp-2">
-                        {item.problemSolved || item.description}
-                      </p>
-                    </div>
-
-                    {item.achievedResult && (
-                      <div className="bg-teal-50/70 p-2.5 rounded-lg border border-teal-200/70 mb-2">
-                        <span className="text-[10px] font-bold uppercase text-teal-700 block mb-0.5">
-                          Resultado Alcançado
+                      {/* Tag "Acompanha dados?" */}
+                      <div className="mb-2">
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded border inline-flex items-center gap-1 ${
+                          ACOMPANHA_BADGE[item.acompanhaDados] || "bg-slate-100 text-slate-500 border-slate-200"
+                        }`}>
+                          <MIcon name="monitoring" className="text-[12px]" />
+                          <span>Acompanha dados: {ACOMPANHA_LABEL[item.acompanhaDados] || "Não informado"}</span>
                         </span>
-                        <p className="text-xs text-teal-900 font-medium line-clamp-2">
-                          {item.achievedResult}
+                      </div>
+
+                      <h4 className="text-xs font-bold text-slate-900 mb-2 line-clamp-2">
+                        {item.title}
+                      </h4>
+
+                      <div className="bg-white p-2.5 rounded-lg border border-slate-200/70 mb-2">
+                        <span className="text-[10px] font-bold uppercase text-slate-400 block mb-0.5">
+                          Problema Resolvido / Escopo
+                        </span>
+                        <p className="text-xs text-slate-700 line-clamp-2">
+                          {item.problemSolved || item.description}
                         </p>
                       </div>
-                    )}
-                  </div>
 
-                  <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-[11px]">
-                    <div className="flex items-center gap-2">
-                      <span className="text-slate-500">UP: <strong>{item.piUp || "-"}</strong></span>
-                      <span className="text-slate-300">•</span>
-                      <span className="text-slate-500">DOWN: <strong>{item.piDown || "-"}</strong></span>
+                      {item.achievedResult && (
+                        <div className="bg-teal-50/70 p-2.5 rounded-lg border border-teal-200/70 mb-2">
+                          <span className="text-[10px] font-bold uppercase text-teal-700 block mb-0.5">
+                            Resultado Alcançado
+                          </span>
+                          <p className="text-xs text-teal-900 font-medium line-clamp-2">
+                            {item.achievedResult}
+                          </p>
+                        </div>
+                      )}
                     </div>
-                    <span className="text-[10px] font-semibold text-slate-500">{item.brand}</span>
+
+                    <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-[11px]">
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-500">UP: <strong>{item.piConclusaoUp || item.piUp || "-"}</strong></span>
+                        <span className="text-slate-300">•</span>
+                        <span className="text-slate-500">DOWN: <strong>{item.piConclusaoDown || item.piDown || "-"}</strong></span>
+                      </div>
+                      <span className="text-[10px] font-semibold text-slate-500">{item.brand}</span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
@@ -7589,8 +7601,8 @@
     function DashboardView({ items, onOpenItem }) {
       const analytics = useMemo(() => {
         const total = items.length || 1;
-        const completed = items.filter(i => i.status === "Concluído");
-        const inProd = items.filter(i => Boolean(i.productionDate));
+        const completed = items.filter(i => isDoneStatus(i.status));
+        const inProd = items.filter(i => Boolean(i.productionDate || i.dataProducao));
         const vwoActive = items.filter(i => (i.status || "").startsWith("VWO"));
         const readyDev = items.filter(i => i.status === "Pronto pra dev");
         const blocked = items.filter(i => i.status === "Impedimento");
@@ -7966,6 +7978,9 @@
       const [selectedId, setSelectedId] = useState(null);
       const [drawerTab, setDrawerTab] = useState("escopo");
 
+      // Ref para o container de rolagem horizontal do Kanban
+      const kanbanScrollRef = useRef(null);
+
       // Estado para Drag and Drop
       const [draggedItemId, setDraggedItemId] = useState(null);
       const [dragOverStatus, setDragOverStatus] = useState(null);
@@ -7980,15 +7995,26 @@
       const [itemToDelete, setItemToDelete] = useState(null);
 
       const timers = useRef({});
-      // Controle de eco do Realtime: gravações em andamento e carimbos já enviados por este cliente
-      const pendingWrites = useRef({});
+      // Controle de eco do Realtime: carimbos (ms) de updated_at já enviados por este cliente
       const sentStamps = useRef({});
       const lastLocalWrite = useRef(0);
       const itemsRef = useRef(items);
       useEffect(() => { itemsRef.current = items; }, [items]);
 
+      // Trava anti-concorrência: mantém activeCardId sincronizado com o modal de detalhes aberto
+      useEffect(() => {
+        activeCardId = selectedId !== null && selectedId !== undefined ? String(selectedId) : null;
+      }, [selectedId]);
+
+      // Reset scroll do Kanban para o início sempre que o usuário pesquisar
+      useEffect(() => {
+        if (kanbanScrollRef.current) {
+          kanbanScrollRef.current.scrollLeft = 0;
+        }
+      }, [searchQuery]);
+
       const selectedItem = useMemo(
-        () => items.find(i => i.id === selectedId) || null,
+        () => items.find(i => String(i.id) === String(selectedId)) || null,
         [items, selectedId]
       );
       const setSelectedItem = (item) => {
@@ -8009,37 +8035,42 @@
         brand: "Todas",
         journeys: ["Agendamento"],
         metrics: ["Conversão", "Experiência"],
-        description: ""
+        description: "",
+        macrotemas: "nao",
+        startDate: "",
+        endDate: "",
+        sprints: "",
+        acompanhaDados: ""
       });
 
-      // Persistência imediata no localStorage (funciona como cache e modo offline/local)
+      // Persistência imediata no localStorage (cache offline)
       useEffect(() => {
         try {
           if (items.length > 0) {
             localStorage.setItem(LOCAL_KEY, JSON.stringify(items));
           }
-        } catch (e) {
-          console.warn("Erro ao salvar no localStorage:", e);
-        }
+        } catch (e) {}
       }, [items]);
 
-      // Modo online (Supabase): carga inicial, sincronização e Realtime
+      // Carregamento inicial do Supabase
       useEffect(() => {
         if (!sb) {
+          const local = loadLocal();
+          setItems(local);
+          itemsRef.current = local;
           setSyncState("local");
-          setItems(loadLocal());
           return;
         }
 
-        let channel;
-
-        const initSupabase = async () => {
+        let isMounted = true;
+        const fetchInitial = async () => {
           setSyncState("connecting");
-          // 2. Busca SEMPRE todos os registros da tabela public.initiatives do Supabase ordenados por position
           const { data, error } = await sb
             .from("initiatives")
             .select("*")
             .order("position", { ascending: true });
+
+          if (!isMounted) return;
 
           if (error) {
             console.error("Erro ao carregar iniciativas do Supabase:", error);
@@ -8050,7 +8081,6 @@
             return;
           }
 
-          // Se a tabela public.initiatives já possuir dados, substitui o cache do localStorage
           if (data && data.length > 0) {
             const normalized = data.map((r, idx) =>
               normalizeItem(
@@ -8058,26 +8088,15 @@
                 idx
               )
             );
-            try {
-              localStorage.setItem(LOCAL_KEY, JSON.stringify(normalized));
-            } catch (e) {
-              console.warn("Falha ao salvar cache no localStorage:", e);
-            }
+            writeLocal(normalized);
             setItems(normalized);
             itemsRef.current = normalized;
             setSyncState("online");
           } else {
-            // 3. Se a tabela estiver vazia no Supabase, faz upsert automático dos cards do localStorage
             const localCards = loadLocal();
             if (localCards.length > 0) {
               setSyncState("saving");
-              const rowsToUpsert = localCards.map((card, idx) => ({
-                id: String(card.id),
-                data: card,
-                position: typeof card.position === "number" ? card.position : idx,
-                updated_at: new Date().toISOString()
-              }));
-
+              const rowsToUpsert = localCards.map(c => toSupabaseRow(c));
               const { error: upsertErr } = await sb
                 .from("initiatives")
                 .upsert(rowsToUpsert, { onConflict: "id" });
@@ -8090,152 +8109,150 @@
               }
               setItems(localCards);
               itemsRef.current = localCards;
-              try {
-                localStorage.setItem(LOCAL_KEY, JSON.stringify(localCards));
-              } catch (e) {}
+              writeLocal(localCards);
             } else {
               setItems([]);
               itemsRef.current = [];
               setSyncState("online");
             }
           }
-
-          // 5. Inscrição Realtime na tabela public.initiatives
-          try {
-            channel = sb
-              .channel("initiatives-sync")
-              .on(
-                "postgres_changes",
-                { event: "*", schema: "public", table: "initiatives" },
-                payload => {
-                  if (payload.eventType === "DELETE") {
-                    const deletedId = String(payload.old?.id || "");
-                    if (!deletedId) return;
-                    setItems(prev => {
-                      const next = prev.filter(i => String(i.id) !== deletedId);
-                      itemsRef.current = next;
-                      try {
-                        localStorage.setItem(LOCAL_KEY, JSON.stringify(next));
-                      } catch (e) {}
-                      return next;
-                    });
-                    return;
-                  }
-
-                  const row = payload.new;
-                  if (!row || !row.id) return;
-                  const rowId = String(row.id);
-
-                  // Evita sobrescrever card se o usuário local estiver digitando nele com debounce ativo
-                  if (timers.current[rowId]) return;
-
-                  // Ignora o "eco" das nossas próprias gravações (pode chegar atrasado e reverter o estado local)
-                  if (pendingWrites.current[rowId] > 0) return;
-                  if (row.updated_at && sentStamps.current[rowId] && sentStamps.current[rowId].has(row.updated_at)) return;
-
-                  const item = normalizeItem({
-                    ...row.data,
-                    id: rowId,
-                    position: typeof row.position === "number" ? row.position : 0
-                  });
-
-                  setItems(prev => {
-                    const exists = prev.some(i => String(i.id) === rowId);
-                    const next = exists
-                      ? prev.map(i => (String(i.id) === rowId ? item : i))
-                      : [item, ...prev];
-                    next.sort((a, b) => (Number(a.position) || 0) - (Number(b.position) || 0));
-                    itemsRef.current = next;
-                    try {
-                      localStorage.setItem(LOCAL_KEY, JSON.stringify(next));
-                    } catch (e) {}
-                    return next;
-                  });
-                }
-              )
-              .subscribe((status, err) => {
-                if (err) console.warn("Aviso na inscrição Realtime:", err);
-              });
-          } catch (rtErr) {
-            console.warn("Falha ao configurar canal Realtime:", rtErr);
-          }
         };
 
-        initSupabase();
+        fetchInitial();
+
+        // Supabase Realtime com bloqueio anti-concorrência
+        const channel = sb
+          .channel("public:initiatives")
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "initiatives" },
+            (payload) => {
+              if (isRemoteUpdateBlocked()) return;
+
+              if (payload.eventType === "INSERT") {
+                const row = payload.new;
+                if (!row || !row.id) return;
+                const newItem = fromSupabaseRow(row, itemsRef.current.length);
+                setItems(prev => {
+                  if (prev.some(i => String(i.id) === String(newItem.id))) return prev;
+                  const next = [...prev, newItem];
+                  itemsRef.current = next;
+                  writeLocal(next);
+                  return next;
+                });
+              } else if (payload.eventType === "UPDATE") {
+                const row = payload.new;
+                if (!row || !row.id) return;
+                const rId = String(row.id);
+                if (isModalOpen() && activeCardId === rId) return;
+
+                const remoteStamp = row.updated_at ? new Date(row.updated_at).getTime() : 0;
+                if (remoteStamp && sentStamps.current[rId] && sentStamps.current[rId].has(remoteStamp)) {
+                  sentStamps.current[rId].delete(remoteStamp);
+                  return;
+                }
+
+                const updated = fromSupabaseRow(row);
+                setItems(prev => {
+                  const idx = prev.findIndex(i => String(i.id) === rId);
+                  if (idx === -1) return prev;
+                  const next = [...prev];
+                  next[idx] = { ...next[idx], ...updated };
+                  itemsRef.current = next;
+                  writeLocal(next);
+                  return next;
+                });
+              } else if (payload.eventType === "DELETE") {
+                const old = payload.old;
+                if (!old || !old.id) return;
+                const rId = String(old.id);
+                if (isModalOpen() && activeCardId === rId) return;
+
+                setItems(prev => {
+                  const next = prev.filter(i => String(i.id) !== rId);
+                  itemsRef.current = next;
+                  writeLocal(next);
+                  return next;
+                });
+                if (String(selectedId) === rId) {
+                  setSelectedId(null);
+                }
+              }
+            }
+          )
+          .subscribe();
+
+        // Polling de fallback a cada 10s (ignorado se modal estiver aberto ou estiver salvando)
+        const pollInterval = setInterval(async () => {
+          if (isRemoteUpdateBlocked() || isModalOpen()) return;
+          try {
+            const { data, error: pollErr } = await sb
+              .from("initiatives")
+              .select("*")
+              .order("position", { ascending: true });
+
+            if (pollErr || !data) return;
+            if (isRemoteUpdateBlocked() || isModalOpen()) return;
+
+            const normalized = data.map((r, idx) => fromSupabaseRow(r, idx));
+            if (JSON.stringify(normalized) !== JSON.stringify(itemsRef.current)) {
+              setItems(normalized);
+              itemsRef.current = normalized;
+              writeLocal(normalized);
+            }
+          } catch (e) {}
+        }, 10000);
 
         return () => {
-          if (channel) {
-            sb.removeChannel(channel);
-          }
+          isMounted = false;
+          clearInterval(pollInterval);
+          if (sb && channel) sb.removeChannel(channel);
         };
-      }, []);
-
-      // Polling de segurança (5s): garante que alterações de colegas apareçam mesmo se o Realtime falhar.
-      // Pula o ciclo se houver edição ativa, gravação pendente ou escrita local durante a leitura.
-      useEffect(() => {
-        if (!sb) return;
-        let cancelled = false;
-        const tick = async () => {
-          const ae = document.activeElement;
-          const editing = ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA") && ae.type !== "checkbox";
-          const busy = Object.keys(timers.current).length > 0 ||
-            Object.values(pendingWrites.current).some(n => n > 0);
-          if (editing || busy) return;
-          const startedAt = Date.now();
-          const { data, error } = await sb.from("initiatives").select("*").order("position", { ascending: true });
-          if (cancelled || error || !data || data.length === 0) return;
-          // Descarta leitura obsoleta se houve escrita local durante a consulta
-          if (lastLocalWrite.current >= startedAt - 1000) return;
-          const remote = data.map((r, idx) =>
-            normalizeItem({ ...r.data, id: String(r.id), position: typeof r.position === "number" ? r.position : idx }, idx)
-          );
-          const local = itemsRef.current;
-          if (JSON.stringify(local) === JSON.stringify(remote)) return;
-          itemsRef.current = remote;
-          setItems(remote);
-          try { localStorage.setItem(LOCAL_KEY, JSON.stringify(remote)); } catch (e) {}
-        };
-        const iv = setInterval(tick, 5000);
-        return () => { cancelled = true; clearInterval(iv); };
       }, []);
 
       // Salva imediatamente um card no Supabase (colunas: id, data, position, updated_at)
       const saveCardToSupabase = async (item) => {
         if (!item || !item.id) return;
-        try {
-          localStorage.setItem(LOCAL_KEY, JSON.stringify(itemsRef.current));
-        } catch (e) {}
+        writeLocal(itemsRef.current);
         if (!sb) return;
+
         const sid = String(item.id);
-        lastLocalWrite.current = Date.now();
         const stamp = new Date().toISOString();
+        const stampMs = new Date(stamp).getTime();
         if (!sentStamps.current[sid]) sentStamps.current[sid] = new Set();
-        sentStamps.current[sid].add(stamp);
-        pendingWrites.current[sid] = (pendingWrites.current[sid] || 0) + 1;
+        sentStamps.current[sid].add(stampMs);
+
+        isSaving = true;
+        savingCount++;
+        lastUpsertAt = Date.now();
         setSyncState("saving");
-        const { error } = await sb.from("initiatives").upsert({
-          id: sid,
-          data: item,
-          position: typeof item.position === "number" ? item.position : 0,
-          updated_at: stamp
-        }, { onConflict: "id" });
-        // Mantém o bloqueio por um instante para cobrir o eco que chega logo após a resposta
-        setTimeout(() => {
-          pendingWrites.current[sid] = Math.max(0, (pendingWrites.current[sid] || 1) - 1);
-        }, 800);
-        if (error) {
-          console.error("Erro ao salvar iniciativa no Supabase:", error);
+
+        try {
+          const row = toSupabaseRow(item);
+          row.updated_at = stamp;
+          const { error } = await sb
+            .from("initiatives")
+            .upsert(row, { onConflict: "id" });
+
+          if (error) {
+            console.error("Erro ao salvar iniciativa no Supabase:", error);
+            setSyncState("error");
+          } else {
+            setSyncState("online");
+          }
+        } catch (e) {
+          console.error("Exceção ao salvar no Supabase:", e);
           setSyncState("error");
-        } else {
-          setSyncState("online");
+        } finally {
+          savingCount = Math.max(0, savingCount - 1);
+          if (savingCount === 0) isSaving = false;
+          lastUpsertAt = Date.now();
         }
       };
 
       // Grava automaticamente no Supabase e no localStorage
       const persist = (id, immediate = false) => {
-        try {
-          localStorage.setItem(LOCAL_KEY, JSON.stringify(itemsRef.current));
-        } catch (e) {}
+        writeLocal(itemsRef.current);
         if (!sb) return;
         clearTimeout(timers.current[id]);
         delete timers.current[id];
@@ -8258,42 +8275,52 @@
       const confirmDeleteItem = async () => {
         if (!itemToDelete) return;
         const id = String(itemToDelete.id);
-        lastLocalWrite.current = Date.now();
         clearTimeout(timers.current[id]);
         delete timers.current[id];
+
         setItems(prev => {
           const next = prev.filter(item => String(item.id) !== id);
           itemsRef.current = next;
-          try {
-            localStorage.setItem(LOCAL_KEY, JSON.stringify(next));
-          } catch (e) {}
+          writeLocal(next);
           return next;
         });
+
         if (String(selectedId) === id) {
           setSelectedId(null);
         }
         setItemToDelete(null);
+
         if (sb) {
+          isSaving = true;
+          lastUpsertAt = Date.now();
           setSyncState("saving");
-          const { error } = await sb.from("initiatives").delete().eq("id", id);
-          if (error) {
-            console.error("Erro ao excluir iniciativa do Supabase:", error);
-            setSyncState("error");
-          } else {
-            setSyncState("online");
+          try {
+            const { error } = await sb.from("initiatives").delete().eq("id", id);
+            if (error) {
+              console.error("Erro ao excluir iniciativa do Supabase:", error);
+              setSyncState("error");
+            } else {
+              setSyncState("online");
+            }
+          } finally {
+            isSaving = false;
+            lastUpsertAt = Date.now();
           }
         }
       };
 
-      // Auditoria: rótulos dos campos e geração automática de entradas no Histórico
+      // Auditoria: rótulos dos campos e geração automática de histórico
       const AUDIT_LABELS = {
         title: "Título", jira: "Sigla Jira", jiraUrl: "Link do Jira", description: "Detalhamento",
         problemSolved: "Resumo Executivo", whatToMeasure: "Hipótese / O que medir",
         achievedResult: "Resultado alcançado", deprioritizedReason: "Motivo da despriorização",
         pi: "PI", brand: "Marca", type: "Classificação", stream: "Tipo de Atuação",
         status: "Status", piUp: "PI Conclusão UP", piDown: "PI Conclusão DOWN",
-        productionDate: "Data em Produção", owners: "Owners", journeys: "Jornadas", metrics: "Métricas",
-        macrotemas: "Macrotemas"
+        piConclusaoUp: "PI Conclusão UP", piConclusaoDown: "PI Conclusão DOWN",
+        productionDate: "Data em Produção", dataProducao: "Data em Produção",
+        owners: "Owners", journeys: "Jornadas", metrics: "Métricas",
+        macrotemas: "Macrotemas", startDate: "Data Início", endDate: "Data Fim",
+        sprints: "Sprints", acompanhaDados: "Acompanha dados?"
       };
       const AUDIT_LONG_FIELDS = ["title", "jira", "jiraUrl", "description", "problemSolved", "whatToMeasure", "achievedResult", "deprioritizedReason"];
 
@@ -8306,7 +8333,11 @@
           const after = patch[k];
           if (JSON.stringify(before) === JSON.stringify(after)) return;
           if (k === "macrotemas") {
-            parts.push(after ? 'Marcou "Macrotemas"' : 'Desmarcou "Macrotemas"');
+            parts.push(`Alterou "Esse item está em macrotemas?" para ${after === "sim" ? "Sim" : "Não"}`);
+          } else if (k === "acompanhaDados") {
+            const lblBefore = ACOMPANHA_LABEL[before] || before || "Não informado";
+            const lblAfter = ACOMPANHA_LABEL[after] || after || "Não informado";
+            parts.push(`Alterou Acompanha dados?: "${lblBefore}" → "${lblAfter}"`);
           } else if (AUDIT_LONG_FIELDS.includes(k)) {
             parts.push(`Editou ${label}`);
           } else if (Array.isArray(after)) {
@@ -8318,7 +8349,7 @@
         return parts.join("; ");
       };
 
-      // Atualiza múltiplos campos de um card e salva automaticamente (com registro de auditoria)
+      // Atualiza múltiplos campos de um card e salva automaticamente (com auditoria)
       const updateItemFields = (id, patch, immediate = false) => {
         setItems(prev => {
           const next = prev.map(item => {
@@ -8354,17 +8385,6 @@
         persist(id, immediate);
       };
 
-      const makeAuditEntry = (text) => ({
-        id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        text,
-        createdAt: formatNow(),
-        updatedAt: null,
-        isSystem: true,
-        author: userName,
-        auditKey: "",
-        ts: Date.now()
-      });
-
       const updateItemField = (id, field, value, immediate = false) => {
         if (field === "pi") {
           if (PI_CYCLE_OPTIONS.includes(value)) {
@@ -8376,10 +8396,22 @@
             return;
           }
         }
+        if (field === "productionDate" || field === "dataProducao") {
+          updateItemFields(id, { productionDate: value, dataProducao: value }, immediate);
+          return;
+        }
+        if (field === "piUp" || field === "piConclusaoUp") {
+          updateItemFields(id, { piUp: value, piConclusaoUp: value }, immediate);
+          return;
+        }
+        if (field === "piDown" || field === "piConclusaoDown") {
+          updateItemFields(id, { piDown: value, piConclusaoDown: value }, immediate);
+          return;
+        }
         updateItemFields(id, { [field]: value }, immediate);
       };
 
-      // Movimentação de Status (via Drag & Drop ou Seletor) com registro automático no histórico e regra de PI = Backlog ao entrar na coluna Backlog
+      // Movimentação de Status (via Drag & Drop ou Seletor) com registro no histórico
       const moveCardStatus = (id, targetStatus) => {
         const current = itemsRef.current.find(i => i.id === id);
         if (!current || current.status === targetStatus) return;
@@ -8418,8 +8450,12 @@
 
       // Atualiza o link do Jira e extrai automaticamente o código AGDE-XXXX
       const handleJiraUrl = (id, url) => {
-        const code = parseJiraCode(url);
-        updateItemFields(id, code ? { jiraUrl: url, jira: code } : { jiraUrl: url });
+        const num = extractJiraNumber(url);
+        if (num) {
+          updateItemFields(id, { jiraUrl: url, jira: `AGDE-${num}` });
+        } else {
+          updateItemFields(id, { jiraUrl: url });
+        }
       };
 
       // Alternar seleção em lista (Jornadas, Métricas, Owners)
@@ -8432,14 +8468,12 @@
         updateItemField(id, field, updated, true);
       };
 
-      // ==========================================
-      // GESTÃO DE COMENTÁRIOS (CRIAR, EDITAR, EXCLUIR)
-      // ==========================================
+      // Gestão de comentários
       const handleAddComment = (e) => {
         e.preventDefault();
         if (!newComment.trim() || !selectedItem) return;
         const commentObj = {
-          id: `com-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          id: `cmt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           text: newComment.trim(),
           createdAt: formatNow(),
           updatedAt: null,
@@ -8448,41 +8482,41 @@
           auditKey: "",
           ts: Date.now()
         };
-        const updatedComments = [commentObj, ...(selectedItem.comments || [])];
-        updateItemField(selectedItem.id, "comments", updatedComments, true);
+        const updated = [commentObj, ...(selectedItem.comments || [])];
+        updateItemFields(selectedItem.id, { comments: updated }, true);
         setNewComment("");
       };
 
-      const handleStartEditComment = (comment) => {
-        setEditingCommentId(comment.id);
-        setEditingCommentText(comment.text);
+      const handleStartEditComment = (c) => {
+        setEditingCommentId(c.id);
+        setEditingCommentText(c.text);
       };
 
-      const handleSaveEditComment = (commentId) => {
+      const handleSaveComment = (commentId) => {
         if (!selectedItem || !editingCommentText.trim()) return;
-        const mapped = (selectedItem.comments || []).map(c =>
-          c.id === commentId
-            ? { ...c, text: editingCommentText.trim(), updatedAt: formatNow() }
-            : c
-        );
-        const updatedComments = [makeAuditEntry("Editou uma observação"), ...mapped];
-        updateItemField(selectedItem.id, "comments", updatedComments, true);
+        const updated = (selectedItem.comments || []).map(c => {
+          if (c.id === commentId) {
+            return {
+              ...c,
+              text: editingCommentText.trim(),
+              updatedAt: formatNow()
+            };
+          }
+          return c;
+        });
+        updateItemFields(selectedItem.id, { comments: updated }, true);
         setEditingCommentId(null);
         setEditingCommentText("");
       };
 
+      // Exclusão silenciosa de comentário (sem poluir histórico com evento de auditoria)
       const handleDeleteComment = (commentId) => {
         if (!selectedItem) return;
-        const updatedComments = [
-          makeAuditEntry("Excluiu uma observação"),
-          ...(selectedItem.comments || []).filter(c => c.id !== commentId)
-        ];
-        updateItemField(selectedItem.id, "comments", updatedComments, true);
+        const updated = (selectedItem.comments || []).filter(c => c.id !== commentId);
+        updateItemFields(selectedItem.id, { comments: updated }, true);
       };
 
-      // ==========================================
-      // DRAG AND DROP HANDLERS
-      // ==========================================
+      // Drag and Drop
       const handleDragStart = (e, item) => {
         setDraggedItemId(item.id);
         e.dataTransfer.effectAllowed = "move";
@@ -8512,15 +8546,16 @@
         }
       };
 
-      // ==========================================
-      // FILTRAGEM DE ITENS E ESTATÍSTICAS RÁPIDAS
-      // ==========================================
+      // Filtragem de itens e estatísticas
+      const isSearching = Boolean(searchQuery.trim());
       const filteredItems = useMemo(() => {
         return items.filter(item => {
           const matchesSearch =
             (item.title || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
             (item.jira || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
-            (item.description || "").toLowerCase().includes(searchQuery.toLowerCase());
+            (item.description || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+            (item.problemSolved || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+            (item.achievedResult || "").toLowerCase().includes(searchQuery.toLowerCase());
           const matchesOwner = selectedOwner === "Todos" || (item.owners || []).includes(selectedOwner);
           const matchesStream = selectedStream === "Todas" || item.stream === selectedStream;
           const matchesPI = selectedPIFilter === "Todos" || item.pi === selectedPIFilter;
@@ -8535,54 +8570,46 @@
           readyForDev: filteredItems.filter(i => i.status === "Pronto pra dev").length,
           vwoLive: filteredItems.filter(i => (i.status || "").startsWith("VWO")).length,
           blocked: filteredItems.filter(i => i.status === "Impedimento").length,
-          completed: filteredItems.filter(i => i.status === "Concluído").length
+          completed: filteredItems.filter(i => isDoneStatus(i.status)).length
         };
       }, [filteredItems]);
 
-      // Criar nova iniciativa
+      // Criação de novo card
       const handleCreateCard = (e) => {
         e.preventDefault();
         if (!newCard.title.trim()) return;
-        const extractedCode = parseJiraCode(newCard.jiraUrl);
-        const nowStr = formatNow();
+
+        const maxPos = items.reduce((max, i) => Math.max(max, typeof i.position === "number" ? i.position : 0), 0);
+        const jiraNum = extractJiraNumber(newCard.jira) || extractJiraNumber(parseJiraCode(newCard.jiraUrl));
         const created = normalizeItem({
+          ...newCard,
           id: String(Date.now()),
-          jiraUrl: newCard.jiraUrl.trim(),
-          position: -Date.now(),
-          jira: extractedCode || newCard.jira || "AGDE-NEW",
-          pi: newCard.pi,
-          stream: newCard.stream,
-          type: newCard.type,
-          owners: newCard.owners.length ? newCard.owners : ["FG"],
-          status: newCard.status,
-          title: newCard.title.trim(),
-          description: newCard.description,
-          comments: [
-            {
-              id: `c-init-${Date.now()}`,
-              text: `Criou o card na coluna "${newCard.status}"`,
-              createdAt: nowStr,
-              updatedAt: null,
-              isSystem: true,
-              author: userName,
-              auditKey: "",
-              ts: Date.now()
-            }
-          ],
-          journeys: newCard.journeys,
-          metrics: newCard.metrics,
-          brand: newCard.brand
+          jira: jiraNum ? `AGDE-${jiraNum}` : (newCard.jira || "AGDE-"),
+          jiraUrl: jiraNum ? buildJiraUrl(jiraNum) : (newCard.jiraUrl || ""),
+          position: maxPos + 1,
+          comments: [{
+            id: `aud-${Date.now()}`,
+            text: `Criou a iniciativa`,
+            createdAt: formatNow(),
+            updatedAt: null,
+            isSystem: true,
+            author: userName,
+            auditKey: "",
+            ts: Date.now()
+          }]
         });
+
         setItems(prev => {
           const next = [created, ...prev];
           itemsRef.current = next;
-          try {
-            localStorage.setItem(LOCAL_KEY, JSON.stringify(next));
-          } catch (e) {}
+          writeLocal(next);
           return next;
         });
-        saveCardToSupabase(created);
+
         setIsNewModalOpen(false);
+        saveCardToSupabase(created);
+
+        // Reset
         setNewCard({
           jira: "AGDE-",
           jiraUrl: "",
@@ -8595,7 +8622,12 @@
           brand: "Todas",
           journeys: ["Agendamento"],
           metrics: ["Conversão", "Experiência"],
-          description: ""
+          description: "",
+          macrotemas: "nao",
+          startDate: "",
+          endDate: "",
+          sprints: "",
+          acompanhaDados: ""
         });
       };
 
@@ -8830,137 +8862,126 @@
                 }}
               />
             ) : (
-              /* ABA "TODOS": KANBAN COM DRAG & DROP E COLUNA "BACKLOG" ANTES DAS DEMAIS */
-              <div className="flex gap-4 overflow-x-auto pb-4 custom-scrollbar">
+              /* ABA "TODOS": KANBAN COM DRAG & DROP */
+              <div
+                ref={kanbanScrollRef}
+                className="flex gap-4 overflow-x-auto pb-4 custom-scrollbar"
+              >
                 {STATUS_LIST.map(status => {
-                  const columnItems = filteredItems.filter(item => item.status === status);
-                  const isDragOver = dragOverStatus === status;
+                  const colItems = filteredItems.filter(i => i.status === status);
+                  // Busca inteligente: quando houver busca digitada, oculta colunas com 0 cards
+                  if (isSearching && colItems.length === 0) {
+                    return null;
+                  }
+
                   return (
                     <div
                       key={status}
                       onDragOver={e => handleDragOverColumn(e, status)}
-                      onDragLeave={() => setDragOverStatus(null)}
                       onDrop={e => handleDropOnColumn(e, status)}
-                      className={`w-80 flex-shrink-0 rounded-xl border flex flex-col max-h-[calc(100vh-205px)] transition-colors ${
-                        isDragOver
+                      className={`w-72 flex-shrink-0 flex flex-col rounded-2xl border transition-all duration-200 ${
+                        dragOverStatus === status
                           ? "bg-indigo-50/80 border-indigo-400 ring-2 ring-indigo-400/30"
-                          : "bg-slate-100/80 border-slate-200/80"
+                          : "bg-slate-100/70 border-slate-200/80"
                       }`}
+                      style={{ maxHeight: "calc(100vh - 180px)" }}
                     >
                       {/* Cabeçalho da Coluna */}
-                      <div className="p-3 border-b border-slate-200/70 flex items-center justify-between bg-slate-100 rounded-t-xl">
+                      <div className="p-3.5 flex items-center justify-between border-b border-slate-200/60 bg-white/50 rounded-t-2xl">
                         <div className="flex items-center gap-2">
-                          <span className={`px-2.5 py-0.5 text-[11px] font-bold rounded-md border ${STATUS_COLORS[status]}`}>
+                          <span className="w-2.5 h-2.5 rounded-full bg-slate-400" />
+                          <h2 className="text-xs font-bold text-slate-800 tracking-wide uppercase">
                             {status}
-                          </span>
+                          </h2>
                         </div>
-                        <span className="text-xs font-bold text-slate-600 bg-white px-2 py-0.5 rounded-full border border-slate-200">
-                          {columnItems.length}
+                        <span className="text-[11px] font-bold text-slate-500 bg-white px-2 py-0.5 rounded-md border border-slate-200 shadow-sm">
+                          {colItems.length}
                         </span>
                       </div>
 
                       {/* Lista de Cards da Coluna */}
-                      <div className="p-2.5 space-y-2.5 overflow-y-auto custom-scrollbar flex-1">
-                        {columnItems.length === 0 ? (
-                          <div className="text-center py-10 text-xs text-slate-400 border border-dashed border-slate-200 rounded-lg">
-                            Arraste um card para cá
+                      <div className="p-2 space-y-2.5 overflow-y-auto flex-1 custom-scrollbar">
+                        {colItems.length === 0 ? (
+                          <div className="text-center py-8 text-xs text-slate-400 border border-dashed border-slate-200 rounded-xl">
+                            Nenhum item nesta etapa
                           </div>
                         ) : (
-                          columnItems.map(item => {
-                            const leftBorderColor =
-                              item.type === "Discovery"
-                                ? "border-l-4 border-l-fuchsia-500"
-                                : item.type === "História"
-                                ? "border-l-4 border-l-blue-500"
-                                : "border-l-4 border-l-emerald-500";
-                            return (
+                          colItems.map(item => (
                             <div
                               key={item.id}
-                              draggable
+                              draggable={true}
                               onDragStart={e => handleDragStart(e, item)}
                               onDragEnd={handleDragEnd}
-                              onClick={() => {
-                                setSelectedItem(item);
-                                setDrawerTab("escopo");
-                              }}
-                              className={`bg-white p-3.5 rounded-xl border ${leftBorderColor} shadow-sm hover:shadow-md hover:border-indigo-300 transition cursor-grab active:cursor-grabbing group ${
-                                draggedItemId === item.id ? "opacity-40 border-indigo-400" : "border-slate-200"
+                              onClick={() => setSelectedItem(item)}
+                              className={`group bg-white rounded-xl border border-slate-200 p-3 shadow-sm hover:shadow-md hover:border-indigo-400 transition cursor-pointer select-none ${
+                                draggedItemId === item.id ? "opacity-30 scale-95" : ""
                               }`}
                             >
-                              {/* Checkbox Macrotemas (topo absoluto do card) */}
-                              <label
-                                onClick={e => e.stopPropagation()}
-                                className="flex items-center gap-1.5 mb-2 text-[11px] font-bold text-slate-600 cursor-pointer select-none w-fit"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={Boolean(item.macrotemas)}
-                                  onClick={e => e.stopPropagation()}
-                                  onChange={e => {
-                                    e.stopPropagation();
-                                    updateItemField(item.id, "macrotemas", e.target.checked, true);
-                                  }}
-                                  className="w-3.5 h-3.5 rounded border-slate-300 accent-indigo-600 cursor-pointer"
-                                />
-                                <span>Macrotemas</span>
-                              </label>
-
-                              {/* Topo do Card: Jira + Tag de PI (ou Backlog quando na coluna Backlog) + Atuação + Owners */}
-                              <div className="flex items-center justify-between gap-1.5 mb-2">
-                                <div className="flex flex-wrap items-center gap-1">
-                                  <span className="text-[11px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
-                                    <JiraLink item={item} />
-                                  </span>
-
-                                  {/* Seletor de PI permitindo escolher entre Backlog e PI1 até PI4 */}
-                                  <select
-                                    value={PI_OPTIONS.includes(item.pi) ? item.pi : "Backlog"}
-                                    onClick={e => e.stopPropagation()}
-                                    onChange={e => {
-                                      e.stopPropagation();
-                                      updateItemField(item.id, "pi", e.target.value, true);
-                                    }}
-                                    title="Selecionar entre Backlog e PI1 até PI4"
-                                    className={`text-[10px] font-bold px-1.5 py-0.5 rounded border cursor-pointer focus:outline-none ${
-                                      PI_COLORS[item.pi] || "bg-slate-100 text-slate-700 border-slate-200"
-                                    }`}
-                                  >
-                                    {PI_OPTIONS.map(piOpt => (
-                                      <option key={piOpt} value={piOpt}>{piOpt}</option>
-                                    ))}
-                                  </select>
-
-                                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${STREAM_BADGE[item.stream] || "bg-slate-100"}`}>
-                                    {item.stream}
-                                  </span>
-                                </div>
-
-                                <div className="flex -space-x-1.5 flex-shrink-0">
-                                  {(item.owners || []).map(o => (
-                                    <span
-                                      key={o}
-                                      title={`Owner: ${o}`}
-                                      className={`w-6 h-6 rounded-full text-[10px] font-bold text-white flex items-center justify-center ring-2 ring-white ${
-                                        OWNER_COLORS[o] || "bg-slate-500"
-                                      }`}
-                                    >
-                                      {o}
-                                    </span>
-                                  ))}
-                                </div>
+                              {/* 1. Indicador Visual de Macrotemas no Topo Absoluto (12px) */}
+                              <div className="flex items-center gap-1.5 mb-2 text-[12px] font-semibold">
+                                {isMacrotemas(item) ? (
+                                  <>
+                                    <span className="w-2.5 h-2.5 rounded-full bg-[#10B981] flex-shrink-0" />
+                                    <span className="text-emerald-700">Macrotemas</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className="w-2.5 h-2.5 rounded-full bg-[#9CA3AF] flex-shrink-0" />
+                                    <span className="text-slate-400">Macrotemas</span>
+                                  </>
+                                )}
                               </div>
 
-                              {/* Título */}
+                              {/* 2. Topo do Card: Jira Link, PI (somente leitura) e Stream */}
+                              <div className="flex items-center justify-between gap-1 mb-2">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span className="text-[11px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                                    <JiraLink item={item} />
+                                  </span>
+                                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                                    PI_COLORS[item.pi] || PI_COLORS["Backlog"]
+                                  }`}>
+                                    {item.pi || "Backlog"}
+                                  </span>
+                                </div>
+
+                                <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${STREAM_BADGE[item.stream]}`}>
+                                  {item.stream}
+                                </span>
+                              </div>
+
+                              {/* 3. Sprints e Semáforo de Prazo (Aparecem apenas fora de Backlog, Concluído e Despriorizado) */}
+                              {!isPlanningLocked(item.status) && (
+                                <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                                  {item.sprints && (
+                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded border bg-purple-50 text-purple-700 border-purple-200">
+                                      {item.sprints}
+                                    </span>
+                                  )}
+                                  {(() => {
+                                    const d = getDeadlineInfo(item.endDate);
+                                    if (!d) return null;
+                                    return (
+                                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded border inline-flex items-center gap-1 ${d.cls}`}>
+                                        <span className={`w-1.5 h-1.5 rounded-full ${d.dot}`} />
+                                        <span>{d.label}</span>
+                                      </span>
+                                    );
+                                  })()}
+                                </div>
+                              )}
+
+                              {/* 4. Título do Card */}
                               <h3 className="text-xs font-semibold text-slate-900 group-hover:text-indigo-600 transition line-clamp-2 mb-1.5">
                                 {item.title}
                               </h3>
 
-                              {/* Descrição curta */}
+                              {/* 5. Descrição curta */}
                               <p className="text-[11px] text-slate-500 line-clamp-2 mb-3">
                                 {item.description}
                               </p>
 
-                              {/* Rodapé do Card: Classificação colorida (Discovery, História, Melhoria), Marca (apenas visualização no card) e Botão Excluir */}
+                              {/* 6. Rodapé do Card: Classificação e Marca (100% Read-Only, sem botões ou selects) */}
                               <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
                                 <span
                                   className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
@@ -8970,27 +8991,12 @@
                                   {item.type || "História"}
                                 </span>
 
-                                <div className="flex items-center gap-1.5">
-                                  <span className="text-[10px] font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded px-2 py-0.5">
-                                    {item.brand || "Todas"}
-                                  </span>
-
-                                  <button
-                                    type="button"
-                                    onClick={e => {
-                                      e.stopPropagation();
-                                      setItemToDelete(item);
-                                    }}
-                                    title="Excluir este item"
-                                    className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 p-1 rounded border border-transparent hover:border-rose-200 transition flex items-center justify-center"
-                                  >
-                                    <MIcon name="delete" className="text-[15px]" />
-                                  </button>
-                                </div>
+                                <span className="text-[10px] font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded px-2 py-0.5">
+                                  {item.brand || "Todas"}
+                                </span>
                               </div>
                             </div>
-                          );
-                          })
+                          ))
                         )}
                       </div>
                     </div>
@@ -9029,35 +9035,45 @@
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setItemToDelete(selectedItem)}
-                        title="Excluir esta iniciativa"
-                        className="px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 text-xs font-bold transition flex items-center gap-1"
-                      >
-                        <MIcon name="delete" className="text-[15px]" />
-                        <span>Excluir</span>
-                      </button>
-
+                      {/* Botão de fechar (botão de excluir fica EXCLUSIVAMENTE no rodapé do drawer) */}
                       <button
                         onClick={() => setSelectedItem(null)}
                         className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center font-bold"
+                        title="Fechar modal"
                       >
                         <MIcon name="close" className="text-[18px]" />
                       </button>
                     </div>
                   </div>
 
-                  {/* Checkbox Macrotemas */}
-                  <label className="flex items-center gap-2 mb-2 text-xs font-bold text-slate-700 cursor-pointer select-none w-fit">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(selectedItem.macrotemas)}
-                      onChange={e => updateItemField(selectedItem.id, "macrotemas", e.target.checked, true)}
-                      className="w-4 h-4 rounded border-slate-300 accent-indigo-600 cursor-pointer"
-                    />
-                    <span>Macrotemas</span>
-                  </label>
+                  {/* Pergunta Macrotemas (com botões [Sim] e [Não]) */}
+                  <div className="mb-3">
+                    <label className="text-[11px] font-bold text-slate-500 block mb-1">
+                      Esse item está em macrotemas?
+                    </label>
+                    <div className="flex items-center gap-2">
+                      {[
+                        { value: "sim", label: "Sim" },
+                        { value: "nao", label: "Não" }
+                      ].map(opt => {
+                        const isSelected = (selectedItem.macrotemas === opt.value) || (opt.value === "sim" && selectedItem.macrotemas === true);
+                        return (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => updateItemField(selectedItem.id, "macrotemas", opt.value, true)}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                              isSelected
+                                ? "bg-indigo-600 text-white shadow-sm border border-indigo-600"
+                                : "bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200"
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
 
                   {/* Título editável */}
                   <input
@@ -9068,31 +9084,109 @@
                     className="w-full text-base font-bold text-slate-900 leading-snug bg-transparent border-b border-transparent hover:border-slate-200 focus:border-indigo-500 focus:outline-none pb-1"
                   />
 
-                  {/* Campo para Link do Card do Jira */}
+                  {/* Planejamento de Prazo & Sprints (Bloqueado em Backlog, Concluído e Despriorizado) */}
+                  {(() => {
+                    const locked = isPlanningLocked(selectedItem.status);
+                    return (
+                      <div className={`mt-3 p-3 rounded-xl border ${locked ? "bg-slate-50 border-slate-200 opacity-70" : "bg-purple-50/50 border-purple-100"}`}>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                            Planejamento de Prazo &amp; Sprints
+                          </span>
+                          {locked && (
+                            <span className="text-[10px] font-semibold text-slate-400">
+                              (Bloqueado para esta coluna)
+                            </span>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-500 block mb-1">Data Início</label>
+                            <input
+                              type="date"
+                              disabled={locked}
+                              value={selectedItem.startDate || ""}
+                              onChange={e => updateItemField(selectedItem.id, "startDate", e.target.value, true)}
+                              className="w-full text-xs font-semibold bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-500 block mb-1">Data Fim</label>
+                            <input
+                              type="date"
+                              disabled={locked}
+                              min={selectedItem.startDate || undefined}
+                              value={selectedItem.endDate || ""}
+                              onChange={e => updateItemField(selectedItem.id, "endDate", e.target.value, true)}
+                              className="w-full text-xs font-semibold bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-500 block mb-1">Sprints</label>
+                            <select
+                              disabled={locked}
+                              value={selectedItem.sprints || ""}
+                              onChange={e => updateItemField(selectedItem.id, "sprints", e.target.value, true)}
+                              className="w-full text-xs font-semibold bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
+                            >
+                              <option value="">Não informado</option>
+                              {SPRINT_OPTIONS.map(sp => (
+                                <option key={sp} value={sp}>{sp}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Campo para Link do Card do Jira com botão Abrir e sincronização automática */}
                   <div className="mt-3 bg-indigo-50/50 p-3 rounded-xl border border-indigo-100">
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-[10px] font-bold uppercase text-indigo-700">
-                        Link do card no Jira (gera o código AGDE-XXXX acima automaticamente)
+                        Código / Link Jira (ex: AGDE-4220)
                       </label>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-slate-500">Sigla:</span>
-                        <input
-                          type="text"
-                          value={selectedItem.jira || ""}
-                          onChange={e => updateItemField(selectedItem.id, "jira", e.target.value.toUpperCase())}
-                          onBlur={() => persist(selectedItem.id, true)}
-                          className="w-24 text-[11px] font-bold text-indigo-700 bg-white border border-indigo-200 rounded px-1.5 py-0.5"
-                        />
-                      </div>
+                      {selectedItem.jiraUrl && (
+                        <a
+                          href={selectedItem.jiraUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 underline inline-flex items-center gap-0.5"
+                        >
+                          <span>Abrir no Jira</span>
+                          <MIcon name="open_in_new" className="text-[12px]" />
+                        </a>
+                      )}
                     </div>
-                    <input
-                      type="url"
-                      placeholder="Cole aqui a URL do Jira (ex: https://.../browse/AGDE-4220)"
-                      value={selectedItem.jiraUrl || ""}
-                      onChange={e => handleJiraUrl(selectedItem.id, e.target.value)}
-                      onBlur={() => persist(selectedItem.id, true)}
-                      className="w-full text-xs bg-white border border-indigo-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500"
-                    />
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        placeholder="Número (ex: 4220)"
+                        value={selectedItem.jira || ""}
+                        onChange={e => {
+                          const rawVal = e.target.value;
+                          const num = extractJiraNumber(rawVal);
+                          if (num) {
+                            updateItemFields(selectedItem.id, {
+                              jira: `AGDE-${num}`,
+                              jiraUrl: `${JIRA_BROWSE_BASE}${num}`
+                            });
+                          } else {
+                            updateItemField(selectedItem.id, "jira", rawVal);
+                          }
+                        }}
+                        onBlur={() => persist(selectedItem.id, true)}
+                        className="w-32 text-xs font-bold text-indigo-700 bg-white border border-indigo-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500"
+                      />
+                      <input
+                        type="url"
+                        placeholder="https://digitalfleury.atlassian.net/browse/AGDE-XXXX"
+                        value={selectedItem.jiraUrl || ""}
+                        onChange={e => handleJiraUrl(selectedItem.id, e.target.value)}
+                        onBlur={() => persist(selectedItem.id, true)}
+                        className="flex-1 text-xs bg-white border border-indigo-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
                   </div>
 
                   {/* Seletores rápidos: Coluna (Status), PI e Marca */}
@@ -9134,7 +9228,7 @@
                       <select
                         value={selectedItem.brand || "Todas"}
                         onChange={e => updateItemField(selectedItem.id, "brand", e.target.value, true)}
-                        className="w-full text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus-outline-none focus:border-indigo-500"
+                        className="w-full text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500"
                       >
                         {BRAND_OPTIONS.map(b => (
                           <option key={b} value={b}>{b}</option>
@@ -9218,9 +9312,9 @@
                                   key={st.value}
                                   type="button"
                                   onClick={() => updateItemField(selectedItem.id, "stream", st.value, true)}
-                                  className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold border transition ${
+                                  className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold border transition ${
                                     active
-                                      ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
+                                      ? "bg-slate-900 text-white border-slate-900 shadow-sm"
                                       : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
                                   }`}
                                 >
@@ -9232,53 +9326,59 @@
                         </div>
                       </div>
 
-                      {/* Responsáveis (Owners) */}
-                      <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/80">
-                        <span className="text-[11px] font-bold text-slate-500 block mb-2">
-                          Owners / Responsáveis UX
-                        </span>
-                        <div className="flex flex-wrap gap-2">
-                          {OWNERS_ALL.map(o => {
-                            const selected = (selectedItem.owners || []).includes(o);
-                            return (
-                              <button
-                                key={o}
-                                type="button"
-                                onClick={() => toggleArrayItem(selectedItem.id, "owners", o)}
-                                className={`px-3 py-1 rounded-full text-xs font-bold border transition flex items-center gap-1.5 ${
-                                  selected
-                                    ? `${OWNER_COLORS[o]} text-white border-transparent shadow-sm`
-                                    : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
-                                }`}
-                              >
-                                <span>{o}</span>
-                                {selected && <MIcon name="check" className="text-[13px]" />}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {/* Detalhamento / User Story */}
+                      {/* Detalhamento do Item */}
                       <div>
-                        <label className="text-xs font-bold text-slate-700 block mb-1.5">
-                          Detalhamento / História de Usuário
+                        <label className="text-xs font-bold text-slate-700 block mb-1">
+                          Detalhamento do Item (Escopo e contexto)
                         </label>
                         <textarea
                           rows={4}
                           value={selectedItem.description}
                           onChange={e => updateItemField(selectedItem.id, "description", e.target.value)}
                           onBlur={() => persist(selectedItem.id, true)}
-                          className="w-full text-xs leading-relaxed text-slate-700 bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-indigo-500"
+                          placeholder="Insira os detalhes técnicos, requisitos de design ou alinhamentos com a equipe..."
+                          className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-indigo-500"
                         />
                       </div>
 
-                      {/* JORNADAS IMPACTADAS (Pílulas Selecionáveis Múltiplas) */}
-                      <div className="bg-slate-50 p-4 rounded-xl border border-slate-200/80">
-                        <div className="flex items-center justify-between mb-2.5">
-                          <span className="text-xs font-bold text-slate-700">
-                            Jornadas Impactadas (Múltipla Escolha)
+                      {/* Responsáveis / Owners (Seleção Múltipla com Pílulas) */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-xs font-bold text-slate-700">
+                            Designers Responsáveis (Owners)
+                          </label>
+                          <span className="text-[11px] text-slate-400">
+                            {(selectedItem.owners || []).length} selecionado(s)
                           </span>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {OWNERS_ALL.map(owner => {
+                            const active = (selectedItem.owners || []).includes(owner);
+                            return (
+                              <button
+                                key={owner}
+                                type="button"
+                                onClick={() => toggleArrayItem(selectedItem.id, "owners", owner)}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 border ${
+                                  active
+                                    ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
+                                    : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+                                }`}
+                              >
+                                <span>{OWNER_NAMES[owner] || owner}</span>
+                                {active && <MIcon name="check" className="text-[14px]" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Jornadas Impactadas */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-xs font-bold text-slate-700">
+                            Jornadas Impactadas
+                          </label>
                           <span className="text-[11px] text-slate-400">
                             {(selectedItem.journeys || []).length} selecionada(s)
                           </span>
@@ -9291,31 +9391,31 @@
                                 key={j}
                                 type="button"
                                 onClick={() => toggleArrayItem(selectedItem.id, "journeys", j)}
-                                className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition inline-flex items-center gap-1 ${
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 border ${
                                   active
-                                    ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
-                                    : "bg-white text-slate-600 border-slate-200 hover:border-indigo-300 hover:text-indigo-600"
+                                    ? "bg-teal-600 text-white border-teal-600 shadow-sm"
+                                    : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
                                 }`}
                               >
-                                {active && <MIcon name="check" className="text-[13px]" />}
                                 <span>{j}</span>
+                                {active && <MIcon name="check" className="text-[14px]" />}
                               </button>
                             );
                           })}
                         </div>
                       </div>
 
-                      {/* MÉTRICAS (Pílulas Selecionáveis Múltiplas) */}
-                      <div className="bg-slate-50 p-4 rounded-xl border border-slate-200/80">
-                        <div className="flex items-center justify-between mb-2.5">
-                          <span className="text-xs font-bold text-slate-700">
-                            Métricas-Alvo (Múltipla Escolha)
-                          </span>
+                      {/* Métricas-Alvo */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-xs font-bold text-slate-700">
+                            Métricas-Alvo / Indicadores
+                          </label>
                           <span className="text-[11px] text-slate-400">
                             {(selectedItem.metrics || []).length} selecionada(s)
                           </span>
                         </div>
-                        <div className="flex flex-wrap gap-2">
+                        <div className="flex flex-wrap gap-1.5">
                           {METRIC_OPTIONS.map(m => {
                             const active = (selectedItem.metrics || []).includes(m);
                             return (
@@ -9323,151 +9423,166 @@
                                 key={m}
                                 type="button"
                                 onClick={() => toggleArrayItem(selectedItem.id, "metrics", m)}
-                                className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition inline-flex items-center gap-1 ${
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 border ${
                                   active
-                                    ? "bg-teal-600 text-white border-teal-600 shadow-sm"
-                                    : "bg-white text-slate-600 border-slate-200 hover:border-teal-400 hover:text-teal-700"
+                                    ? "bg-purple-600 text-white border-purple-600 shadow-sm"
+                                    : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
                                 }`}
                               >
-                                {active && <MIcon name="check" className="text-[13px]" />}
                                 <span>{m}</span>
+                                {active && <MIcon name="check" className="text-[14px]" />}
                               </button>
                             );
                           })}
                         </div>
                       </div>
 
-                      {/* Motivo de Despriorização (editável quando necessário) */}
-                      {(selectedItem.status === "Despriorizado" || selectedItem.deprioritizedReason) && (
-                        <div className="bg-rose-50/70 border border-rose-200 p-4 rounded-xl">
-                          <label className="text-xs font-bold text-rose-800 block mb-1.5">
-                            Motivo da Despriorização
-                          </label>
+                      {/* Motivo da despriorização */}
+                      {selectedItem.status === "Despriorizado" && (
+                        <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl space-y-2">
+                          <div className="flex items-center gap-2 text-rose-800 font-bold text-xs">
+                            <MIcon name="warning" className="text-[18px]" />
+                            <span>Motivo da Despriorização</span>
+                          </div>
                           <textarea
-                            rows={2}
+                            rows={3}
                             value={selectedItem.deprioritizedReason || ""}
                             onChange={e => updateItemField(selectedItem.id, "deprioritizedReason", e.target.value)}
                             onBlur={() => persist(selectedItem.id, true)}
-                            placeholder="Descreva o motivo estratégico da despriorização..."
-                            className="w-full text-xs text-rose-900 bg-white border border-rose-200 rounded-lg p-2.5 focus:outline-none"
+                            placeholder="Por que esta iniciativa foi despriorizada ou cancelada?"
+                            className="w-full text-xs bg-white border border-rose-200 rounded-lg p-2.5 focus:outline-none focus:border-rose-500"
                           />
                         </div>
                       )}
                     </div>
                   )}
 
+                  {/* ABA 2: OBSERVAÇÕES & HISTÓRICO */}
                   {drawerTab === "timeline" && (
                     <div className="space-y-4">
-                      {/* Formulário de Novo Comentário */}
-                      <form onSubmit={handleAddComment} className="flex gap-2">
-                        <input
-                          type="text"
+                      {/* Adicionar comentário */}
+                      <form onSubmit={handleAddComment} className="space-y-2">
+                        <label className="text-xs font-bold text-slate-700 block">
+                          Novo Comentário ou Alinhamento
+                        </label>
+                        <textarea
+                          rows={3}
                           value={newComment}
                           onChange={e => setNewComment(e.target.value)}
-                          placeholder="Escreva um comentário ou observação (data e hora registradas automaticamente)..."
-                          className="flex-1 text-xs bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 focus:outline-none focus:border-indigo-500"
+                          placeholder="Escreva uma anotação, impedimento ou decisão tomada..."
+                          className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-indigo-500"
                         />
-                        <button
-                          type="submit"
-                          className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4 py-2.5 rounded-lg transition"
-                        >
-                          Publicar
-                        </button>
+                        <div className="flex justify-end">
+                          <button
+                            type="submit"
+                            disabled={!newComment.trim()}
+                            className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                          >
+                            <MIcon name="send" className="text-[14px]" />
+                            <span>Publicar Comentário</span>
+                          </button>
+                        </div>
                       </form>
 
-                      {/* Lista de Comentários e Movimentações Automáticas */}
-                      <div className="space-y-3 pt-2">
-                        {(selectedItem.comments || []).length === 0 ? (
-                          <p className="text-xs text-slate-400 text-center py-8 border border-dashed border-slate-200 rounded-xl">
-                            Nenhuma observação ou movimentação registrada neste card.
-                          </p>
+                      <div className="pt-3 border-t border-slate-200 space-y-3">
+                        <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                          Histórico &amp; Interações ({selectedItem.comments?.length || 0})
+                        </h4>
+
+                        {(!selectedItem.comments || selectedItem.comments.length === 0) ? (
+                          <div className="text-center py-6 text-xs text-slate-400">
+                            Nenhum registro ainda nesta iniciativa.
+                          </div>
                         ) : (
-                          selectedItem.comments.map(comment => {
-                            const isEditing = editingCommentId === comment.id;
+                          selectedItem.comments.map(c => {
+                            const isEditing = editingCommentId === c.id;
+                            if (c.isSystem) {
+                              return (
+                                <div
+                                  key={c.id}
+                                  className="p-2.5 bg-slate-50 rounded-lg border border-slate-200/60 text-xs text-slate-600 flex items-start gap-2"
+                                >
+                                  <MIcon name="history" className="text-[16px] text-slate-400 flex-shrink-0 mt-0.5" />
+                                  <div className="flex-1">
+                                    <p className="font-medium text-slate-700">{c.text}</p>
+                                    <span className="text-[10px] text-slate-400">
+                                      Por {c.author || "Sistema"} • {c.createdAt}
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            }
+
                             return (
                               <div
-                                key={comment.id}
-                                className={`p-3.5 rounded-xl border ${
-                                  comment.isSystem
-                                    ? "bg-indigo-50/40 border-indigo-100"
-                                    : "bg-slate-50 border-slate-200/80"
-                                }`}
+                                key={c.id}
+                                className="p-3 bg-white rounded-xl border border-slate-200 shadow-sm space-y-2"
                               >
-                                <div className="flex items-center justify-between gap-2 mb-1.5">
-                                  <div className="flex items-center gap-2">
-                                    <span className={`w-2 h-2 rounded-full ${comment.isSystem ? "bg-indigo-500" : "bg-slate-700"}`}></span>
-                                    <span className="text-[11px] font-bold text-slate-600">
-                                      {comment.isSystem ? "Histórico" : "Comentário"}
+                                <div className="flex items-center justify-between text-[11px]">
+                                  <span className="font-bold text-slate-800 flex items-center gap-1.5">
+                                    <span className="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 font-bold flex items-center justify-center text-[10px]">
+                                      {(c.author || "U")[0]}
                                     </span>
-                                    {comment.author && (
-                                      <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded">
-                                        {comment.author}
-                                      </span>
-                                    )}
-                                    <span className="text-[10px] text-slate-400">
-                                      • {comment.createdAt}
-                                    </span>
-                                    {comment.updatedAt && (
-                                      <span className="text-[10px] text-amber-600 font-medium">
-                                        (editado em {comment.updatedAt})
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  {!isEditing && (
-                                    <div className="flex items-center gap-2">
-                                      <button
-                                        type="button"
-                                        onClick={() => handleStartEditComment(comment)}
-                                        className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 inline-flex items-center gap-0.5"
-                                      >
-                                        <MIcon name="edit" className="text-[13px]" />
-                                        <span>Editar</span>
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleDeleteComment(comment.id)}
-                                        className="text-[11px] font-semibold text-rose-600 hover:text-rose-800 inline-flex items-center gap-0.5"
-                                      >
-                                        <MIcon name="delete" className="text-[13px]" />
-                                        <span>Excluir</span>
-                                      </button>
-                                    </div>
-                                  )}
+                                    <span>{c.author || "Usuário"}</span>
+                                  </span>
+                                  <span className="text-slate-400">{c.createdAt}</span>
                                 </div>
 
                                 {isEditing ? (
-                                  <div className="space-y-2 mt-2">
+                                  <div className="space-y-2 pt-1">
                                     <textarea
                                       rows={2}
                                       value={editingCommentText}
                                       onChange={e => setEditingCommentText(e.target.value)}
-                                      className="w-full text-xs bg-white border border-indigo-300 rounded-lg p-2 focus:outline-none"
+                                      className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none focus:border-indigo-500"
                                     />
-                                    <div className="flex justify-end gap-2">
+                                    <div className="flex items-center justify-end gap-2">
                                       <button
                                         type="button"
                                         onClick={() => {
                                           setEditingCommentId(null);
                                           setEditingCommentText("");
                                         }}
-                                        className="px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-200 rounded-md"
+                                        className="px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100 rounded"
                                       >
                                         Cancelar
                                       </button>
                                       <button
                                         type="button"
-                                        onClick={() => handleSaveEditComment(comment.id)}
-                                        className="px-3 py-1 text-xs font-semibold bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+                                        onClick={() => handleSaveComment(c.id)}
+                                        className="px-3 py-1 text-xs font-bold bg-indigo-600 text-white rounded hover:bg-indigo-700"
                                       >
-                                        Salvar alteração
+                                        Salvar
                                       </button>
                                     </div>
                                   </div>
                                 ) : (
-                                  <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">
-                                    {comment.text}
+                                  <p className="text-xs text-slate-700 whitespace-pre-wrap">
+                                    {c.text}
                                   </p>
+                                )}
+
+                                {!isEditing && (
+                                  <div className="flex items-center justify-between pt-1 border-t border-slate-100 text-[10px] text-slate-400">
+                                    <span>{c.updatedAt ? `Editado em ${c.updatedAt}` : ""}</span>
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleStartEditComment(c)}
+                                        className="hover:text-indigo-600"
+                                      >
+                                        Editar
+                                      </button>
+                                      <span>•</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteComment(c.id)}
+                                        className="hover:text-rose-600"
+                                      >
+                                        Excluir
+                                      </button>
+                                    </div>
+                                  </div>
                                 )}
                               </div>
                             );
@@ -9477,100 +9592,156 @@
                     </div>
                   )}
 
-                  {drawerTab === "resultados" && (
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div>
-                          <label className="text-[11px] font-bold text-slate-500 block mb-1">
-                            PI Conclusão UP
-                          </label>
-                          <select
-                            value={selectedItem.piUp || ""}
-                            onChange={e => updateItemField(selectedItem.id, "piUp", e.target.value, true)}
-                            className="w-full text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
-                          >
-                            <option value="">Não concluído / N/A</option>
-                            {PI_OPTIONS.map(p => (
-                              <option key={p} value={p}>{p}</option>
-                            ))}
-                          </select>
+                  {/* ABA 3: PRODUÇÃO & RESULTADO */}
+                  {drawerTab === "resultados" && (() => {
+                    const isCardDone = isDoneStatus(selectedItem.status);
+                    return (
+                      <div className="space-y-4">
+                        {/* Aviso sutil quando o card NÃO está na coluna Concluído */}
+                        {!isCardDone && (
+                          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs flex items-center gap-2">
+                            <MIcon name="lock" className="text-[16px] text-amber-700 flex-shrink-0" />
+                            <span className="font-medium">
+                              🔒 Esta seção só fica habilitada para preenchimento quando o card é movido para a coluna Concluído.
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Controles da aba (bloqueados se o card não estiver em Concluído) */}
+                        <div className={`space-y-4 ${!isCardDone ? "opacity-60 pointer-events-none" : ""}`}>
+                          {/* 1. Acompanha dados? no topo absoluto da aba */}
+                          <div>
+                            <label className="text-[11px] font-bold text-slate-500 block mb-1">
+                              Acompanha dados?
+                            </label>
+                            <div className="flex items-center gap-2">
+                              {[
+                                { value: "sim", label: "SIM" },
+                                { value: "nao", label: "NÃO" },
+                                { value: "a_definir", label: "A DEFINIR" }
+                              ].map(opt => {
+                                const isSelected = (selectedItem.acompanhaDados || "") === opt.value;
+                                return (
+                                  <button
+                                    key={opt.value}
+                                    type="button"
+                                    disabled={!isCardDone}
+                                    onClick={() => updateItemField(selectedItem.id, "acompanhaDados", opt.value, true)}
+                                    className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                                      isSelected
+                                        ? "bg-indigo-600 text-white shadow-sm border border-indigo-600"
+                                        : "bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200"
+                                    } ${!isCardDone ? "opacity-60 cursor-not-allowed" : ""}`}
+                                  >
+                                    {opt.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          {/* 2. Linha de PI Conclusão UP / DOWN e Data em Produção (100% manual) */}
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div>
+                              <label className="text-[11px] font-bold text-slate-500 block mb-1">
+                                PI Conclusão UP
+                              </label>
+                              <select
+                                disabled={!isCardDone}
+                                value={selectedItem.piConclusaoUp || selectedItem.piUp || ""}
+                                onChange={e => updateItemField(selectedItem.id, "piConclusaoUp", e.target.value, true)}
+                                className="w-full text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
+                              >
+                                <option value="">Não concluído / N/A</option>
+                                {PI_OPTIONS.map(p => (
+                                  <option key={p} value={p}>{p}</option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="text-[11px] font-bold text-slate-500 block mb-1">
+                                PI Conclusão DOWN
+                              </label>
+                              <select
+                                disabled={!isCardDone}
+                                value={selectedItem.piConclusaoDown || selectedItem.piDown || ""}
+                                onChange={e => updateItemField(selectedItem.id, "piConclusaoDown", e.target.value, true)}
+                                className="w-full text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
+                              >
+                                <option value="">Não concluído / N/A</option>
+                                {PI_OPTIONS.map(p => (
+                                  <option key={p} value={p}>{p}</option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="text-[11px] font-bold text-slate-500 block mb-1">
+                                Data em Produção
+                              </label>
+                              <input
+                                type="date"
+                                disabled={!isCardDone}
+                                value={selectedItem.productionDate || selectedItem.dataProducao || ""}
+                                onChange={e => updateItemField(selectedItem.id, "productionDate", e.target.value, true)}
+                                className="w-full text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
+                              />
+                            </div>
+                          </div>
+
+                          {/* 3. Textareas */}
+                          <div>
+                            <label className="text-xs font-bold text-slate-700 block mb-1">
+                              O que a solução resolveu? (Resumo Executivo)
+                            </label>
+                            <textarea
+                              disabled={!isCardDone}
+                              rows={3}
+                              placeholder="Descreva o impacto real para o paciente ou negócio..."
+                              value={selectedItem.problemSolved || ""}
+                              onChange={e => updateItemField(selectedItem.id, "problemSolved", e.target.value)}
+                              onBlur={() => persist(selectedItem.id, true)}
+                              className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-xs font-bold text-slate-700 block mb-1">
+                              Hipótese / O que iremos medir?
+                            </label>
+                            <textarea
+                              disabled={!isCardDone}
+                              rows={2}
+                              placeholder="Ex: Taxa de sucesso na busca de unidades e avanço para Dia/Hora..."
+                              value={selectedItem.whatToMeasure || ""}
+                              onChange={e => updateItemField(selectedItem.id, "whatToMeasure", e.target.value)}
+                              onBlur={() => persist(selectedItem.id, true)}
+                              className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-xs font-bold text-slate-700 block mb-1">
+                              Qual foi o resultado alcançado?
+                            </label>
+                            <textarea
+                              disabled={!isCardDone}
+                              rows={3}
+                              placeholder="Ex: Aumento de +4.2% na conversão da etapa de unidades no VWO..."
+                              value={selectedItem.achievedResult || ""}
+                              onChange={e => updateItemField(selectedItem.id, "achievedResult", e.target.value)}
+                              onBlur={() => persist(selectedItem.id, true)}
+                              className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
+                            />
+                          </div>
                         </div>
-
-                        <div>
-                          <label className="text-[11px] font-bold text-slate-500 block mb-1">
-                            PI Conclusão DOWN
-                          </label>
-                          <select
-                            value={selectedItem.piDown || ""}
-                            onChange={e => updateItemField(selectedItem.id, "piDown", e.target.value, true)}
-                            className="w-full text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
-                          >
-                            <option value="">Não concluído / N/A</option>
-                            {PI_OPTIONS.map(p => (
-                              <option key={p} value={p}>{p}</option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className="text-[11px] font-bold text-slate-500 block mb-1">
-                            Data em Produção
-                          </label>
-                          <input
-                            type="date"
-                            value={selectedItem.productionDate || ""}
-                            onChange={e => updateItemField(selectedItem.id, "productionDate", e.target.value, true)}
-                            className="w-full text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
-                          />
-                        </div>
                       </div>
-
-                      <div>
-                        <label className="text-xs font-bold text-slate-700 block mb-1">
-                          O que a solução resolveu? (Resumo Executivo)
-                        </label>
-                        <textarea
-                          rows={3}
-                          placeholder="Descreva o impacto real para o paciente ou negócio..."
-                          value={selectedItem.problemSolved || ""}
-                          onChange={e => updateItemField(selectedItem.id, "problemSolved", e.target.value)}
-                          onBlur={() => persist(selectedItem.id, true)}
-                          className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-indigo-500"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="text-xs font-bold text-slate-700 block mb-1">
-                          Hipótese / O que iremos medir?
-                        </label>
-                        <textarea
-                          rows={2}
-                          placeholder="Ex: Taxa de sucesso na busca de unidades e avanço para Dia/Hora..."
-                          value={selectedItem.whatToMeasure || ""}
-                          onChange={e => updateItemField(selectedItem.id, "whatToMeasure", e.target.value)}
-                          onBlur={() => persist(selectedItem.id, true)}
-                          className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-indigo-500"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="text-xs font-bold text-slate-700 block mb-1">
-                          Qual foi o resultado alcançado?
-                        </label>
-                        <textarea
-                          rows={3}
-                          placeholder="Ex: Aumento de +4.2% na conversão da etapa de unidades no VWO..."
-                          value={selectedItem.achievedResult || ""}
-                          onChange={e => updateItemField(selectedItem.id, "achievedResult", e.target.value)}
-                          onBlur={() => persist(selectedItem.id, true)}
-                          className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-indigo-500"
-                        />
-                      </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>
 
-                {/* Rodapé do Drawer */}
+                {/* Rodapé do Drawer com botão de exclusão e fechar */}
                 <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3">
                   <button
                     type="button"
@@ -9578,19 +9749,19 @@
                     className="px-3 py-2 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 text-xs font-bold transition flex items-center gap-1.5"
                   >
                     <MIcon name="delete" className="text-[16px]" />
-                    <span>Excluir Item</span>
+                    <span>Excluir Card</span>
                   </button>
 
-                  <div className="flex items-center gap-3">
-                    <span className="text-[11px] text-slate-500 font-medium hidden sm:inline-flex items-center gap-1">
-                      <MIcon name={SYNC_ICON[syncState] || "cloud_done"} className="text-[14px] text-indigo-600" />
-                      <span>{SYNC_LABEL[syncState]} • Salvo automaticamente</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-slate-400">
+                      {syncState === "saving" ? "Salvando..." : syncState === "online" ? "Sincronizado" : ""}
                     </span>
                     <button
+                      type="button"
                       onClick={() => setSelectedItem(null)}
-                      className="bg-slate-900 text-white text-xs font-semibold px-4 py-2 rounded-lg"
+                      className="px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition"
                     >
-                      Fechar Painel
+                      Fechar
                     </button>
                   </div>
                 </div>
@@ -9598,201 +9769,288 @@
             </div>
           )}
 
-          {/* MODAL DE CONFIRMAÇÃO DE EXCLUSÃO DE ITEM */}
-          {itemToDelete && (
-            <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
-              <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center text-lg flex-shrink-0">
-                    <MIcon name="delete_forever" className="text-[22px]" />
+          {/* MODAL: NOVO CARD */}
+          {isNewModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-[1px] p-4">
+              <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
+                <div className="p-5 bg-indigo-950 text-white flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <MIcon name="add_circle" className="text-[20px] text-indigo-400" />
+                    <h3 className="text-sm font-bold">Criar Nova Iniciativa</h3>
                   </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-900">Excluir este item?</h3>
-                    <p className="text-xs text-slate-500 mt-1">
-                      Você está prestes a excluir permanentemente o card{" "}
-                      <strong className="text-slate-800">{itemToDelete.jira}</strong>:{" "}
-                      <span className="text-slate-700">"{itemToDelete.title}"</span>. Esta ação removerá o item do banco de dados.
-                    </p>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsNewModalOpen(false)}
+                    className="text-slate-400 hover:text-white"
+                  >
+                    <MIcon name="close" className="text-[18px]" />
+                  </button>
                 </div>
 
-                <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <form onSubmit={handleCreateCard} className="p-5 space-y-4 max-h-[80vh] overflow-y-auto custom-scrollbar">
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1">
+                      Título da Iniciativa *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ex: Redesenho do fluxo de agendamento de exames..."
+                      value={newCard.title}
+                      onChange={e => setNewCard({ ...newCard, title: e.target.value })}
+                      className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg p-2.5 focus:outline-none focus:border-indigo-500 font-semibold"
+                    />
+                  </div>
+
+                  {/* Jira e Código */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">
+                        Código Jira
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="AGDE-1234"
+                        value={newCard.jira}
+                        onChange={e => {
+                          const val = e.target.value;
+                          const num = extractJiraNumber(val);
+                          if (num) {
+                            setNewCard({ ...newCard, jira: `AGDE-${num}`, jiraUrl: `${JIRA_BROWSE_BASE}${num}` });
+                          } else {
+                            setNewCard({ ...newCard, jira: val });
+                          }
+                        }}
+                        className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none focus:border-indigo-500 font-bold text-indigo-600"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">
+                        Link Jira
+                      </label>
+                      <input
+                        type="url"
+                        placeholder="https://.../AGDE-1234"
+                        value={newCard.jiraUrl}
+                        onChange={e => {
+                          const val = e.target.value;
+                          const num = extractJiraNumber(val);
+                          if (num) {
+                            setNewCard({ ...newCard, jiraUrl: val, jira: `AGDE-${num}` });
+                          } else {
+                            setNewCard({ ...newCard, jiraUrl: val });
+                          }
+                        }}
+                        className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Macrotemas */}
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-500 block mb-1">
+                      Esse item está em macrotemas?
+                    </label>
+                    <div className="flex items-center gap-2">
+                      {[
+                        { value: "sim", label: "Sim" },
+                        { value: "nao", label: "Não" }
+                      ].map(opt => (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          onClick={() => setNewCard({ ...newCard, macrotemas: opt.value })}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                            newCard.macrotemas === opt.value
+                              ? "bg-indigo-600 text-white shadow-sm border border-indigo-600"
+                              : "bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200"
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Coluna / Status e PI */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">
+                        Status Inicial
+                      </label>
+                      <select
+                        value={newCard.status}
+                        onChange={e => setNewCard({ ...newCard, status: e.target.value })}
+                        className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none focus:border-indigo-500 font-semibold"
+                      >
+                        {STATUS_LIST.map(s => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">
+                        PI (Ciclo)
+                      </label>
+                      <select
+                        value={newCard.pi}
+                        onChange={e => setNewCard({ ...newCard, pi: e.target.value })}
+                        className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none focus:border-indigo-500 font-semibold"
+                      >
+                        {PI_OPTIONS.map(p => (
+                          <option key={p} value={p}>{p}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Classificação, Tipo de Atuação e Marca */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">
+                        Classificação
+                      </label>
+                      <select
+                        value={newCard.type}
+                        onChange={e => setNewCard({ ...newCard, type: e.target.value })}
+                        className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none focus:border-indigo-500"
+                      >
+                        {TYPE_OPTIONS.map(t => (
+                          <option key={t} value={t}>{t}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">
+                        Atuação
+                      </label>
+                      <select
+                        value={newCard.stream}
+                        onChange={e => setNewCard({ ...newCard, stream: e.target.value })}
+                        className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none focus:border-indigo-500"
+                      >
+                        {STREAM_OPTIONS.map(st => (
+                          <option key={st.value} value={st.value}>{st.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">
+                        Marca
+                      </label>
+                      <select
+                        value={newCard.brand}
+                        onChange={e => setNewCard({ ...newCard, brand: e.target.value })}
+                        className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none focus:border-indigo-500"
+                      >
+                        {BRAND_OPTIONS.map(b => (
+                          <option key={b} value={b}>{b}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Prazos & Sprints */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">Data Início</label>
+                      <input
+                        type="date"
+                        value={newCard.startDate}
+                        onChange={e => setNewCard({ ...newCard, startDate: e.target.value })}
+                        className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">Data Fim</label>
+                      <input
+                        type="date"
+                        min={newCard.startDate || undefined}
+                        value={newCard.endDate}
+                        onChange={e => setNewCard({ ...newCard, endDate: e.target.value })}
+                        className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">Sprints</label>
+                      <select
+                        value={newCard.sprints}
+                        onChange={e => setNewCard({ ...newCard, sprints: e.target.value })}
+                        className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none focus:border-indigo-500"
+                      >
+                        <option value="">Não informado</option>
+                        {SPRINT_OPTIONS.map(sp => (
+                          <option key={sp} value={sp}>{sp}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Descrição */}
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1">
+                      Descrição / Escopo
+                    </label>
+                    <textarea
+                      rows={3}
+                      placeholder="Contexto da iniciativa..."
+                      value={newCard.description}
+                      onChange={e => setNewCard({ ...newCard, description: e.target.value })}
+                      className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg p-2.5 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsNewModalOpen(false)}
+                      className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-5 py-2 text-xs font-bold bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm flex items-center gap-1.5"
+                    >
+                      <MIcon name="check" className="text-[16px]" />
+                      <span>Criar Iniciativa</span>
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* MODAL DE CONFIRMAÇÃO DE EXCLUSÃO */}
+          {itemToDelete && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-[1px] p-4">
+              <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl border border-slate-200 p-5 space-y-4">
+                <div className="w-10 h-10 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+                  <MIcon name="warning" className="text-[22px]" />
+                </div>
+                <div className="text-center">
+                  <h3 className="text-sm font-bold text-slate-900">Excluir Iniciativa?</h3>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Tem certeza de que deseja excluir permanentemente o card <strong>"{itemToDelete.title}"</strong> ({itemToDelete.jira})? Essa ação não pode ser desfeita.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 pt-2">
                   <button
                     type="button"
                     onClick={() => setItemToDelete(null)}
-                    className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition"
+                    className="flex-1 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg border border-slate-200"
                   >
                     Cancelar
                   </button>
                   <button
                     type="button"
                     onClick={confirmDeleteItem}
-                    className="px-4 py-2 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-lg shadow-sm transition"
+                    className="flex-1 py-2 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-lg shadow-sm"
                   >
-                    Sim, Excluir Item
+                    Confirmar Exclusão
                   </button>
                 </div>
               </div>
-            </div>
-          )}
-
-          {/* MODAL DE NOVA INICIATIVA */}
-          {isNewModalOpen && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
-              <form
-                onSubmit={handleCreateCard}
-                className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-xl border border-slate-200 space-y-4 max-h-[92vh] overflow-y-auto custom-scrollbar"
-              >
-                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                  <h3 className="text-sm font-bold text-slate-900">Adicionar Nova Iniciativa UX</h3>
-                  <button
-                    type="button"
-                    onClick={() => setIsNewModalOpen(false)}
-                    className="text-slate-400 hover:text-slate-600 flex items-center justify-center"
-                  >
-                    <MIcon name="close" className="text-[18px]" />
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="col-span-2">
-                    <label className="text-[11px] font-bold text-slate-600 block mb-1">Link do Card no Jira (opcional)</label>
-                    <input
-                      type="url"
-                      placeholder="https://.../browse/AGDE-1234"
-                      value={newCard.jiraUrl}
-                      onChange={e => {
-                        const url = e.target.value;
-                        const code = parseJiraCode(url);
-                        setNewCard({ ...newCard, jiraUrl: url, jira: code || newCard.jira });
-                      }}
-                      className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-600 block mb-1">Código Jira</label>
-                    <input
-                      type="text"
-                      value={newCard.jira}
-                      onChange={e => setNewCard({ ...newCard, jira: e.target.value.toUpperCase() })}
-                      className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 font-bold text-indigo-600"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-bold text-slate-600 block mb-1">Título da Iniciativa</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: [Melhoria] Novo fluxo de reagendamento rápido"
-                    value={newCard.title}
-                    onChange={e => setNewCard({ ...newCard, title: e.target.value })}
-                    className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-600 block mb-1">Coluna Inicial</label>
-                    <select
-                      value={newCard.status}
-                      onChange={e => {
-                        const nextStatus = e.target.value;
-                        const nextPi =
-                          nextStatus === "Backlog"
-                            ? "Backlog"
-                            : (newCard.pi === "Backlog" ? "PI3" : newCard.pi);
-                        setNewCard({ ...newCard, status: nextStatus, pi: nextPi });
-                      }}
-                      className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-2"
-                    >
-                      {STATUS_LIST.map(s => (
-                        <option key={s} value={s}>{s}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-600 block mb-1">PI</label>
-                    <select
-                      value={PI_OPTIONS.includes(newCard.pi) ? newCard.pi : "Backlog"}
-                      onChange={e => setNewCard({ ...newCard, pi: e.target.value })}
-                      className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-2"
-                    >
-                      {PI_OPTIONS.map(p => (
-                        <option key={p} value={p}>{p}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-600 block mb-1">Classificação</label>
-                    <select
-                      value={newCard.type}
-                      onChange={e => setNewCard({ ...newCard, type: e.target.value })}
-                      className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-2"
-                    >
-                      {TYPE_OPTIONS.map(t => (
-                        <option key={t} value={t}>{t}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-600 block mb-1">Atuação</label>
-                    <select
-                      value={newCard.stream}
-                      onChange={e => setNewCard({ ...newCard, stream: e.target.value })}
-                      className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-2"
-                    >
-                      {STREAM_OPTIONS.map(st => (
-                        <option key={st.value} value={st.value}>{st.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-bold text-slate-600 block mb-1">Marca</label>
-                  <select
-                    value={newCard.brand}
-                    onChange={e => setNewCard({ ...newCard, brand: e.target.value })}
-                    className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2"
-                  >
-                    {BRAND_OPTIONS.map(b => (
-                      <option key={b} value={b}>{b}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-bold text-slate-600 block mb-1">Detalhamento / User Story</label>
-                  <textarea
-                    rows={3}
-                    value={newCard.description}
-                    onChange={e => setNewCard({ ...newCard, description: e.target.value })}
-                    placeholder="Como cliente do Agendamento Digital, eu quero..."
-                    className="w-full text-xs border border-slate-200 rounded-lg p-3"
-                  />
-                </div>
-
-                <div className="flex justify-end gap-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsNewModalOpen(false)}
-                    className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-4 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg"
-                  >
-                    Criar Card
-                  </button>
-                </div>
-              </form>
             </div>
           )}
         </div>
