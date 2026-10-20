@@ -15,6 +15,7 @@ Este documento estabelece as diretrizes fundamentais e invioláveis de arquitetu
 - Nunca remova, renomeie ou altere o escopo das constantes globais essenciais:
   - `OWNER_NAMES` (e `window.OWNER_NAMES`): mapeamento dos designers responsáveis.
   - `OWNER_COLORS` (e `window.OWNER_COLORS`): paleta de cores dos owners.
+  - `OWNER_BADGE_STYLES` (e `window.OWNER_BADGE_STYLES`): cores e estilos das badges de iniciais de owners.
   - `STATUS_LIST`: ordem e nomenclatura das colunas do Kanban.
   - `PI_OPTIONS`, `BRAND_OPTIONS`, `TYPE_OPTIONS`, `STREAM_OPTIONS`, `JOURNEY_OPTIONS`, `METRIC_OPTIONS`, `SPRINT_OPTIONS`.
   - Credenciais e configurações em `config.js` (`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `window.APP_CONFIG`).
@@ -52,3 +53,19 @@ Este documento estabelece as diretrizes fundamentais e invioláveis de arquitetu
   2. Havendo registros no Supabase, eles são adotados como o estado oficial e gravados no `localStorage` como cache de leitura.
   3. Nunca sobrescreva registros do Supabase com dados locais antigos ou com sementes padrão.
   4. O `localStorage` atua exclusivamente como cache offline / fallback quando não há conexão com o Supabase.
+
+---
+
+## REGRA 5: LAYOUT IMUTÁVEL DO HEADER DO CARD E CORES DE OWNER
+- A primeira linha do card deve conter obrigatoriamente o indicador `Macrotemas` à esquerda e a badge de iniciais do `Owner` (`FG`, `CS`, `JO`, `ML`, `PA`) à direita, cada uma com sua cor fixa definida em `OWNER_BADGE_STYLES`.
+- É proibido remover, reposicionar ou alterar as cores das iniciais dos Owners sem um comando explícito do usuário.
+- **Mapeamento de Iniciais e Cores Exclusivas (`OWNER_BADGE_STYLES`):**
+  - Se o campo `owner` do card estiver salvo com o nome completo (`Fábio`, `Carlos`, `Jefferson`, `Murillo`, `Paulo`) ou com a sigla (`FG`, `CS`, `JO`, `ML`, `PA`), converta sempre para a sigla de 2 letras na badge do card e aplique exatamente estas cores fixas:
+    - **FG** (Fábio): `background: #EEF2FF; color: #4F46E5; border: 1px solid #C7D2FE;`
+    - **CS** (Carlos): `background: #E0F2FE; color: #0284C7; border: 1px solid #BAE6FD;`
+    - **JO** (Jefferson): `background: #FEF3C7; color: #D97706; border: 1px solid #FDE68A;`
+    - **ML** (Murillo): `background: #CCFBF1; color: #0D9488; border: 1px solid #99F6E4;`
+    - **PA** (Paulo): `background: #FFE4E6; color: #E11D48; border: 1px solid #FECDD3;`
+- **Estilo da Pílula:**
+  - `font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 6px; line-height: 1.2; letter-spacing: 0.02em;`
+  - Somente leitura, sem clique próprio para não conflitar com a abertura do card.

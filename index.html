@@ -1,8 +1,9 @@
 <!-- REGRAS IMUTÁVEIS DA ARQUITETURA - LEIA ANTES DE EDITAR
 1. REGRA 1 (IMUTABILIDADE DO DESIGN SYSTEM E UI): É estritamente proibido alterar cores, fontes, espaçamentos, layout de componentes existentes, cabeçalho, filtros ou estrutura de abas que não foram explicitamente solicitados no prompt.
-2. REGRA 2 (CONSTANTES GLOBAIS INTOCÁVEIS): Nunca remova ou renomeie OWNER_NAMES, SUPABASE_URL, SUPABASE_ANON_KEY ou listas de colunas/status.
+2. REGRA 2 (CONSTANTES GLOBAIS INTOCÁVEIS): Nunca remova ou renomeie OWNER_NAMES, OWNER_BADGE_STYLES, SUPABASE_URL, SUPABASE_ANON_KEY ou listas de colunas/status.
 3. REGRA 3 (PERSISTÊNCIA UNIVERSAL JSONB NO SUPABASE): A tabela public.initiatives usa a coluna data (JSONB). É proibido criar funções de mapeamento (normalize, sanitize, toSupabase) que filtrem ou omitam propriedades do objeto do card. Todo upsert DEVE enviar o objeto completo { ...card } dentro da coluna data, e todo select do Supabase DEVE fazer o merge completo { ...baseCard, ...(row.data || {}), id: String(row.id) } preservando 100% das chaves salvas no banco.
 4. REGRA 4 (FONTE DA VERDADE): Dados vindos de public.initiatives no Supabase SEMPRE têm prioridade absoluta sobre localStorage e sobre qualquer array inicial (DEFAULT_INITIATIVES / INITIAL_DATA). Nunca sobrescreva dados do Supabase com valores padrão no refresh.
+5. REGRA 5 (LAYOUT IMUTÁVEL DO HEADER DO CARD E CORES DE OWNER): A primeira linha do card deve conter obrigatoriamente o indicador Macrotemas à esquerda e a badge de iniciais do Owner (FG, CS, JO, ML, PA) à direita, cada uma com sua cor fixa definida em OWNER_BADGE_STYLES. É proibido remover, reposicionar ou alterar as cores das iniciais dos Owners sem um comando explícito do usuário.
 Consulte ARCHITECTURE_RULES.md para detalhes.
 -->
 <!DOCTYPE html>
@@ -77,6 +78,69 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
       Paulo: 'Paulo'
     };
     window.OWNER_NAMES = OWNER_NAMES;
+
+    // REGRA 5: Cores e Estilos Imutáveis das Badges de Iniciais de Owner
+    const OWNER_BADGE_STYLES = {
+      FG: { background: "#EEF2FF", color: "#4F46E5", border: "1px solid #C7D2FE" },
+      CS: { background: "#E0F2FE", color: "#0284C7", border: "1px solid #BAE6FD" },
+      JO: { background: "#FEF3C7", color: "#D97706", border: "1px solid #FDE68A" },
+      ML: { background: "#CCFBF1", color: "#0D9488", border: "1px solid #99F6E4" },
+      PA: { background: "#FFE4E6", color: "#E11D48", border: "1px solid #FECDD3" },
+      "Fábio": { background: "#EEF2FF", color: "#4F46E5", border: "1px solid #C7D2FE" },
+      "Fabio": { background: "#EEF2FF", color: "#4F46E5", border: "1px solid #C7D2FE" },
+      "Carlos": { background: "#E0F2FE", color: "#0284C7", border: "1px solid #BAE6FD" },
+      "Jefferson": { background: "#FEF3C7", color: "#D97706", border: "1px solid #FDE68A" },
+      "Murillo": { background: "#CCFBF1", color: "#0D9488", border: "1px solid #99F6E4" },
+      "Paulo": { background: "#FFE4E6", color: "#E11D48", border: "1px solid #FECDD3" }
+    };
+    window.OWNER_BADGE_STYLES = OWNER_BADGE_STYLES;
+
+    const OWNER_TO_SIGLA = {
+      FG: "FG",
+      CS: "CS",
+      JO: "JO",
+      ML: "ML",
+      PA: "PA",
+      "Fábio": "FG",
+      "Fabio": "FG",
+      "Carlos": "CS",
+      "Jefferson": "JO",
+      "Murillo": "ML",
+      "Paulo": "PA"
+    };
+    window.OWNER_TO_SIGLA = OWNER_TO_SIGLA;
+
+    function getOwnerSigla(owner) {
+      if (!owner) return "FG";
+      const str = String(owner).trim();
+      if (OWNER_TO_SIGLA[str]) return OWNER_TO_SIGLA[str];
+      const upper = str.toUpperCase();
+      if (OWNER_TO_SIGLA[upper]) return OWNER_TO_SIGLA[upper];
+      return upper.slice(0, 2);
+    }
+
+    function getCardOwnerSiglas(item) {
+      if (!item) return ["FG"];
+      let rawList = [];
+      if (Array.isArray(item.owners) && item.owners.length > 0) {
+        rawList = item.owners;
+      } else if (typeof item.owner === "string" && item.owner.trim()) {
+        rawList = [item.owner.trim()];
+      } else if (typeof item.owners === "string" && item.owners.trim()) {
+        rawList = [item.owners.trim()];
+      } else {
+        rawList = ["FG"];
+      }
+
+      const siglas = [];
+      for (const r of rawList) {
+        const s = getOwnerSigla(r);
+        if (s && !siglas.includes(s)) {
+          siglas.push(s);
+        }
+      }
+      return siglas.length > 0 ? siglas : ["FG"];
+    }
 
     const { useState, useMemo, useRef, useEffect, Component } = React;
 
@@ -7568,6 +7632,57 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                     className="bg-slate-50/70 hover:bg-white rounded-xl border border-slate-200 p-4 shadow-sm hover:shadow-md hover:border-teal-400 transition cursor-pointer flex flex-col justify-between"
                   >
                     <div>
+                      {/* 1. Indicador Visual de Macrotemas e Badge de Iniciais do Owner no Topo Absoluto */}
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          width: "100%"
+                        }}
+                        className="mb-2"
+                      >
+                        <div className="flex items-center gap-1.5 text-[12px] font-semibold">
+                          {isMacrotemas(item) ? (
+                            <>
+                              <span className="w-2.5 h-2.5 rounded-full bg-[#10B981] flex-shrink-0" />
+                              <span className="text-emerald-700">Macrotemas</span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="w-2.5 h-2.5 rounded-full bg-[#9CA3AF] flex-shrink-0" />
+                              <span className="text-slate-400">Macrotemas</span>
+                            </>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          {getCardOwnerSiglas(item).map(sigla => {
+                            const bStyle = OWNER_BADGE_STYLES[sigla] || OWNER_BADGE_STYLES["FG"];
+                            return (
+                              <span
+                                key={sigla}
+                                style={{
+                                  fontSize: "11px",
+                                  fontWeight: 700,
+                                  padding: "2px 7px",
+                                  borderRadius: "6px",
+                                  lineHeight: 1.2,
+                                  letterSpacing: "0.02em",
+                                  userSelect: "none",
+                                  pointerEvents: "none",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  ...bStyle
+                                }}
+                              >
+                                {sigla}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+
                       <div className="flex items-center justify-between gap-2 mb-2">
                         <div className="flex flex-wrap items-center gap-1.5">
                           <span className="text-xs font-bold text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
@@ -9046,19 +9161,55 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                                 draggedItemId === item.id ? "opacity-30 scale-95" : ""
                               }`}
                             >
-                              {/* 1. Indicador Visual de Macrotemas no Topo Absoluto (12px) */}
-                              <div className="flex items-center gap-1.5 mb-2 text-[12px] font-semibold">
-                                {isMacrotemas(item) ? (
-                                  <>
-                                    <span className="w-2.5 h-2.5 rounded-full bg-[#10B981] flex-shrink-0" />
-                                    <span className="text-emerald-700">Macrotemas</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <span className="w-2.5 h-2.5 rounded-full bg-[#9CA3AF] flex-shrink-0" />
-                                    <span className="text-slate-400">Macrotemas</span>
-                                  </>
-                                )}
+                              {/* 1. Indicador Visual de Macrotemas e Badge de Iniciais do Owner no Topo Absoluto */}
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  width: "100%"
+                                }}
+                                className="mb-2"
+                              >
+                                <div className="flex items-center gap-1.5 text-[12px] font-semibold">
+                                  {isMacrotemas(item) ? (
+                                    <>
+                                      <span className="w-2.5 h-2.5 rounded-full bg-[#10B981] flex-shrink-0" />
+                                      <span className="text-emerald-700">Macrotemas</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <span className="w-2.5 h-2.5 rounded-full bg-[#9CA3AF] flex-shrink-0" />
+                                      <span className="text-slate-400">Macrotemas</span>
+                                    </>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-1 flex-shrink-0">
+                                  {getCardOwnerSiglas(item).map(sigla => {
+                                    const bStyle = OWNER_BADGE_STYLES[sigla] || OWNER_BADGE_STYLES["FG"];
+                                    return (
+                                      <span
+                                        key={sigla}
+                                        style={{
+                                          fontSize: "11px",
+                                          fontWeight: 700,
+                                          padding: "2px 7px",
+                                          borderRadius: "6px",
+                                          lineHeight: 1.2,
+                                          letterSpacing: "0.02em",
+                                          userSelect: "none",
+                                          pointerEvents: "none",
+                                          display: "inline-flex",
+                                          alignItems: "center",
+                                          justifyContent: "center",
+                                          ...bStyle
+                                        }}
+                                      >
+                                        {sigla}
+                                      </span>
+                                    );
+                                  })}
+                                </div>
                               </div>
 
                               {/* 2. Topo do Card: Jira Link, PI (somente leitura) e Stream */}
