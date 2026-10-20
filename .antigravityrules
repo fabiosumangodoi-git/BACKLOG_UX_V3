@@ -1,0 +1,7 @@
+# REGRAS IMUTÁVEIS DA ARQUITETURA - LEIA ANTES DE EDITAR
+
+Consulte e siga rigorosamente o arquivo ARCHITECTURE_RULES.md:
+1. REGRA 1 (IMUTABILIDADE DO DESIGN SYSTEM E UI): É estritamente proibido alterar cores, fontes, espaçamentos, layout de componentes existentes, cabeçalho, filtros ou estrutura de abas que não foram explicitamente solicitados no prompt.
+2. REGRA 2 (CONSTANTES GLOBAIS INTOCÁVEIS): Nunca remova ou renomeie OWNER_NAMES, SUPABASE_URL, SUPABASE_ANON_KEY ou listas de colunas/status.
+3. REGRA 3 (PERSISTÊNCIA UNIVERSAL JSONB NO SUPABASE): A tabela public.initiatives usa a coluna data (JSONB). É proibido criar funções de mapeamento (normalize, sanitize, toSupabase) que filtrem ou omitam propriedades do objeto do card. Todo upsert DEVE enviar o objeto completo { ...card } dentro da coluna data, e todo select do Supabase DEVE fazer o merge completo { ...baseCard, ...(row.data || {}), id: String(row.id) } preservando 100% das chaves salvas no banco.
+4. REGRA 4 (FONTE DA VERDADE): Dados vindos de public.initiatives no Supabase SEMPRE têm prioridade absoluta sobre localStorage e sobre qualquer array inicial (DEFAULT_INITIATIVES / INITIAL_DATA). Nunca sobrescreva dados do Supabase com valores padrão no refresh.

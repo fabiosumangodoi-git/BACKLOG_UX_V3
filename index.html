@@ -1,3 +1,10 @@
+<!-- REGRAS IMUTÁVEIS DA ARQUITETURA - LEIA ANTES DE EDITAR
+1. REGRA 1 (IMUTABILIDADE DO DESIGN SYSTEM E UI): É estritamente proibido alterar cores, fontes, espaçamentos, layout de componentes existentes, cabeçalho, filtros ou estrutura de abas que não foram explicitamente solicitados no prompt.
+2. REGRA 2 (CONSTANTES GLOBAIS INTOCÁVEIS): Nunca remova ou renomeie OWNER_NAMES, SUPABASE_URL, SUPABASE_ANON_KEY ou listas de colunas/status.
+3. REGRA 3 (PERSISTÊNCIA UNIVERSAL JSONB NO SUPABASE): A tabela public.initiatives usa a coluna data (JSONB). É proibido criar funções de mapeamento (normalize, sanitize, toSupabase) que filtrem ou omitam propriedades do objeto do card. Todo upsert DEVE enviar o objeto completo { ...card } dentro da coluna data, e todo select do Supabase DEVE fazer o merge completo { ...baseCard, ...(row.data || {}), id: String(row.id) } preservando 100% das chaves salvas no banco.
+4. REGRA 4 (FONTE DA VERDADE): Dados vindos de public.initiatives no Supabase SEMPRE têm prioridade absoluta sobre localStorage e sobre qualquer array inicial (DEFAULT_INITIATIVES / INITIAL_DATA). Nunca sobrescreva dados do Supabase com valores padrão no refresh.
+Consulte ARCHITECTURE_RULES.md para detalhes.
+-->
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -7125,59 +7132,84 @@
       return { diffDays, label: "Em atraso", dot: "bg-rose-500", cls: "bg-rose-50 text-rose-700 border-rose-200" };
     }
 
-    // Normaliza um card SEM descartar propriedades: o spread (...raw) preserva qualquer campo novo/antigo
+    // Card padrão com todos os campos estruturados (REGRA 3)
+    const baseCard = {
+      id: "",
+      jira: "AGDE-",
+      jiraUrl: "",
+      pi: "Backlog",
+      previousPi: "PI3",
+      title: "",
+      stream: "UP e DOWN",
+      type: "História",
+      status: "Backlog",
+      owners: ["FG"],
+      brand: "Todas",
+      journeys: ["Agendamento"],
+      metrics: ["Conversão", "Experiência"],
+      description: "",
+      macrotemas: "nao",
+      startDate: "",
+      endDate: "",
+      sprints: "",
+      acompanhaDados: "",
+      piConclusaoUp: "",
+      piConclusaoDown: "",
+      piUp: "",
+      piDown: "",
+      productionDate: "",
+      dataProducao: "",
+      problemSolved: "",
+      whatToMeasure: "",
+      achievedResult: "",
+      deprioritizedReason: "",
+      comments: [],
+      position: 0
+    };
+
+    // Normaliza um card SEM descartar propriedades: preserva 100% dos campos (REGRA 3)
     function normalizeCard(raw, idx = 0) {
-      raw = raw || {};
-      const status = normalizeStatus(raw.status);
-      const parsedPi = normalizePI(raw.pi, raw.cycle);
-      const previousPi = PI_CYCLE_OPTIONS.includes(raw.previousPi)
-        ? raw.previousPi
-        : (PI_CYCLE_OPTIONS.includes(parsedPi) ? parsedPi : "PI3");
-      const pi = PI_OPTIONS.includes(parsedPi)
-        ? parsedPi
-        : (status === "Backlog" ? "Backlog" : previousPi);
-      const piUp = normalizePI(raw.piConclusaoUp || raw.piUp || "");
-      const piDown = normalizePI(raw.piConclusaoDown || raw.piDown || "");
-      const jiraNum = extractJiraNumber(raw.jira) || extractJiraNumber(parseJiraCode(raw.jiraUrl));
-      const productionDate = normalizeDateToISO(raw.dataProducao || raw.productionDate);
-      const acompanhaDados = ["sim", "nao", "a_definir"].includes(raw.acompanhaDados) ? raw.acompanhaDados : "";
-      return {
+      if (!raw) return { ...baseCard, id: String(Date.now() + idx), position: idx };
+      const cardId = String(raw.id || Date.now() + idx);
+      const pos = Number.isFinite(Number(raw.position)) && raw.position !== null ? Number(raw.position) : idx;
+
+      const card = {
+        ...baseCard,
         ...raw,
-        id: String(raw.id || Date.now() + idx),
-        jira: jiraNum ? `AGDE-${jiraNum}` : (raw.jira || "AGDE-"),
-        jiraUrl: jiraNum ? buildJiraUrl(jiraNum) : (raw.jiraUrl || ""),
-        pi,
-        previousPi,
-        status,
-        stream: normalizeStream(raw.stream),
-        type: TYPE_OPTIONS.includes(raw.type) ? raw.type : "História",
-        brand: normalizeBrand(raw.brand),
-        owners: Array.isArray(raw.owners) ? raw.owners : ["FG"],
-        journeys: normalizeJourneys(raw.journeys),
-        metrics: normalizeMetrics(raw.metrics),
-        comments: normalizeComments(raw.comments, raw.id || idx),
-        piUp: PI_OPTIONS.includes(piUp) ? piUp : "",
-        piConclusaoUp: PI_OPTIONS.includes(piUp) ? piUp : "",
-        piDown: PI_OPTIONS.includes(piDown) ? piDown : "",
-        piConclusaoDown: PI_OPTIONS.includes(piDown) ? piDown : "",
-        // Data de produção/conclusão: 100% manual (productionDate e dataProducao sincronizados)
-        productionDate,
-        dataProducao: productionDate,
-        whatToMeasure: raw.whatToMeasure || "",
-        problemSolved: raw.problemSolved || "",
-        achievedResult: raw.achievedResult || "",
-        deprioritizedReason: raw.deprioritizedReason || "",
-        macrotemas: normalizeMacrotemas(raw.macrotemas),
-        startDate: normalizeDateToISO(raw.startDate),
-        endDate: normalizeDateToISO(raw.endDate),
-        sprints: SPRINT_OPTIONS.includes(raw.sprints) ? raw.sprints : "",
-        acompanhaDados,
-        position: Number.isFinite(Number(raw.position)) && raw.position !== null && raw.position !== ""
-          ? Number(raw.position)
-          : idx
+        id: cardId,
+        position: pos
       };
+
+      if (raw.macrotemas !== undefined && raw.macrotemas !== null) {
+        card.macrotemas = (raw.macrotemas === true || raw.macrotemas === "sim") ? "sim" : (raw.macrotemas === false || raw.macrotemas === "nao" ? "nao" : raw.macrotemas);
+      }
+      if (raw.acompanhaDados) {
+        card.acompanhaDados = raw.acompanhaDados;
+      }
+      const prodDate = raw.productionDate || raw.dataProducao || "";
+      if (prodDate) {
+        card.productionDate = prodDate;
+        card.dataProducao = prodDate;
+      }
+      const upVal = raw.piConclusaoUp || raw.piUp || "";
+      if (upVal) {
+        card.piConclusaoUp = upVal;
+        card.piUp = upVal;
+      }
+      const downVal = raw.piConclusaoDown || raw.piDown || "";
+      if (downVal) {
+        card.piConclusaoDown = downVal;
+        card.piDown = downVal;
+      }
+
+      if (!Array.isArray(card.owners)) card.owners = card.owners ? [card.owners] : ["FG"];
+      if (!Array.isArray(card.journeys)) card.journeys = card.journeys ? [card.journeys] : [];
+      if (!Array.isArray(card.metrics)) card.metrics = card.metrics ? [card.metrics] : [];
+      if (!Array.isArray(card.comments)) card.comments = Array.isArray(raw.comments) ? raw.comments : (Array.isArray(raw.history) ? raw.history : []);
+
+      return card;
     }
-    // Alias mantido por compatibilidade com o restante do código
+    // Alias mantido por compatibilidade
     const normalizeItem = normalizeCard;
 
     // Extrai o código "AGDE-1234" automaticamente a partir da URL colada
@@ -7211,29 +7243,60 @@
       return activeCardId !== null;
     }
 
-    // Serialização completa: TODAS as propriedades do card vão para a coluna data (jsonb)
+    // Serialização completa (REGRA 3): Todo upsert DEVE enviar o objeto completo { ...card } dentro de data (jsonb)
     function toSupabaseRow(card) {
       return {
         id: String(card.id),
-        data: { ...card },
+        data: { ...card, updatedAt: new Date().toISOString() },
         position: Number(card.position) || 0,
         updated_at: new Date().toISOString()
       };
     }
 
-    // Desserialização completa: spread de row.data + colunas id/position
+    // Desserialização completa (REGRA 3): { ...baseCard, ...(row.data || {}), id: String(row.id) }
     function fromSupabaseRow(row, idx = 0) {
-      const data = row && row.data && typeof row.data === "object" ? row.data : {};
-      return normalizeCard(
-        {
-          ...data,
-          id: String(row.id),
-          position: row.position !== null && row.position !== undefined && Number.isFinite(Number(row.position))
-            ? Number(row.position)
-            : idx
-        },
-        idx
-      );
+      if (!row) return { ...baseCard, id: String(Date.now() + idx), position: idx };
+      const rowData = (row.data && typeof row.data === "object") ? row.data : {};
+      const cardId = String(row.id != null ? row.id : (rowData.id || Date.now() + idx));
+      const pos = (row.position !== null && row.position !== undefined && Number.isFinite(Number(row.position)))
+        ? Number(row.position)
+        : (Number.isFinite(Number(rowData.position)) ? Number(rowData.position) : idx);
+
+      const card = {
+        ...baseCard,
+        ...rowData,
+        id: cardId,
+        position: pos
+      };
+
+      if (rowData.macrotemas !== undefined && rowData.macrotemas !== null) {
+        card.macrotemas = (rowData.macrotemas === true || rowData.macrotemas === "sim") ? "sim" : (rowData.macrotemas === false || rowData.macrotemas === "nao" ? "nao" : rowData.macrotemas);
+      }
+      if (rowData.acompanhaDados) {
+        card.acompanhaDados = rowData.acompanhaDados;
+      }
+      const prodDate = rowData.productionDate || rowData.dataProducao || "";
+      if (prodDate) {
+        card.productionDate = prodDate;
+        card.dataProducao = prodDate;
+      }
+      const upVal = rowData.piConclusaoUp || rowData.piUp || "";
+      if (upVal) {
+        card.piConclusaoUp = upVal;
+        card.piUp = upVal;
+      }
+      const downVal = rowData.piConclusaoDown || rowData.piDown || "";
+      if (downVal) {
+        card.piConclusaoDown = downVal;
+        card.piDown = downVal;
+      }
+
+      if (!Array.isArray(card.owners)) card.owners = card.owners ? [card.owners] : ["FG"];
+      if (!Array.isArray(card.journeys)) card.journeys = card.journeys ? [card.journeys] : [];
+      if (!Array.isArray(card.metrics)) card.metrics = card.metrics ? [card.metrics] : [];
+      if (!Array.isArray(card.comments)) card.comments = Array.isArray(rowData.comments) ? rowData.comments : (Array.isArray(rowData.history) ? rowData.history : []);
+
+      return card;
     }
 
     function writeLocal(list) {
@@ -8102,12 +8165,7 @@
           }
 
           if (data && data.length > 0) {
-            const normalized = data.map((r, idx) =>
-              normalizeItem(
-                { ...r.data, id: String(r.id), position: typeof r.position === "number" ? r.position : idx },
-                idx
-              )
-            );
+            const normalized = data.map((r, idx) => fromSupabaseRow(r, idx));
             writeLocal(normalized);
             setItems(normalized);
             itemsRef.current = normalized;
@@ -8230,105 +8288,6 @@
         };
       }, []);
 
-      // Salva imediatamente um card no Supabase (colunas: id, data, position, updated_at)
-      const saveCardToSupabase = async (item) => {
-        if (!item || !item.id) return;
-        writeLocal(itemsRef.current);
-        if (!sb) return;
-
-        const sid = String(item.id);
-        const stamp = new Date().toISOString();
-        const stampMs = new Date(stamp).getTime();
-        if (!sentStamps.current[sid]) sentStamps.current[sid] = new Set();
-        sentStamps.current[sid].add(stampMs);
-
-        isSaving = true;
-        savingCount++;
-        lastUpsertAt = Date.now();
-        setSyncState("saving");
-
-        try {
-          const row = toSupabaseRow(item);
-          row.updated_at = stamp;
-          const { error } = await sb
-            .from("initiatives")
-            .upsert(row, { onConflict: "id" });
-
-          if (error) {
-            console.error("Erro ao salvar iniciativa no Supabase:", error);
-            setSyncState("error");
-          } else {
-            setSyncState("online");
-          }
-        } catch (e) {
-          console.error("Exceção ao salvar no Supabase:", e);
-          setSyncState("error");
-        } finally {
-          savingCount = Math.max(0, savingCount - 1);
-          if (savingCount === 0) isSaving = false;
-          lastUpsertAt = Date.now();
-        }
-      };
-
-      // Grava automaticamente no Supabase e no localStorage
-      const persist = (id, immediate = false) => {
-        writeLocal(itemsRef.current);
-        if (!sb) return;
-        clearTimeout(timers.current[id]);
-        delete timers.current[id];
-
-        const execute = async () => {
-          delete timers.current[id];
-          const latest = itemsRef.current.find(i => String(i.id) === String(id));
-          if (!latest) return;
-          await saveCardToSupabase(latest);
-        };
-
-        if (immediate) {
-          execute();
-        } else {
-          timers.current[id] = setTimeout(execute, 300);
-        }
-      };
-
-      // Exclui permanentemente um item já criado (localStorage + Supabase)
-      const confirmDeleteItem = async () => {
-        if (!itemToDelete) return;
-        const id = String(itemToDelete.id);
-        clearTimeout(timers.current[id]);
-        delete timers.current[id];
-
-        setItems(prev => {
-          const next = prev.filter(item => String(item.id) !== id);
-          itemsRef.current = next;
-          writeLocal(next);
-          return next;
-        });
-
-        if (String(selectedId) === id) {
-          setSelectedId(null);
-        }
-        setItemToDelete(null);
-
-        if (sb) {
-          isSaving = true;
-          lastUpsertAt = Date.now();
-          setSyncState("saving");
-          try {
-            const { error } = await sb.from("initiatives").delete().eq("id", id);
-            if (error) {
-              console.error("Erro ao excluir iniciativa do Supabase:", error);
-              setSyncState("error");
-            } else {
-              setSyncState("online");
-            }
-          } finally {
-            isSaving = false;
-            lastUpsertAt = Date.now();
-          }
-        }
-      };
-
       // Auditoria: rótulos dos campos e geração automática de histórico
       const AUDIT_LABELS = {
         title: "Título", jira: "Sigla Jira", jiraUrl: "Link do Jira", description: "Detalhamento",
@@ -8369,71 +8328,221 @@
         return parts.join("; ");
       };
 
+      // ============================================================
+      // PERSISTÊNCIA REAL E INSTANTÂNEA (SUPABASE JSONB + LOCALSTORAGE)
+      // ============================================================
+      const persistCardNow = async (updatedCard) => {
+        if (!updatedCard || !updatedCard.id) return;
+        const idStr = String(updatedCard.id);
+        const nowIso = new Date().toISOString();
+
+        if (timers.current[idStr]) {
+          clearTimeout(timers.current[idStr]);
+          delete timers.current[idStr];
+        }
+
+        const current = (itemsRef.current || []).find(i => String(i.id) === idStr) || (selectedItem && String(selectedItem.id) === idStr ? selectedItem : null);
+
+        let cardToSave = {
+          ...updatedCard,
+          id: idStr,
+          updatedAt: nowIso
+        };
+
+        // Auditoria automática de histórico se comments não foi explicitamente fornecido
+        if (current && (!updatedCard.comments || updatedCard.comments === current.comments)) {
+          const text = buildAuditText(current, updatedCard);
+          if (text) {
+            const list = current.comments || [];
+            const first = list[0];
+            const now = Date.now();
+            if (first && first.isSystem && first.author === userName && first.auditKey === text && now - (first.ts || 0) < 120000) {
+              cardToSave.comments = [{ ...first, createdAt: formatNow(), ts: now }, ...list.slice(1)];
+            } else {
+              cardToSave.comments = [{
+                id: `aud-${now}-${Math.random().toString(36).slice(2, 6)}`,
+                text,
+                createdAt: formatNow(),
+                updatedAt: null,
+                isSystem: true,
+                author: userName,
+                auditKey: text,
+                ts: now
+              }, ...list];
+            }
+          }
+        }
+
+        if (cardToSave.productionDate && !cardToSave.dataProducao) cardToSave.dataProducao = cardToSave.productionDate;
+        if (cardToSave.dataProducao && !cardToSave.productionDate) cardToSave.productionDate = cardToSave.dataProducao;
+        if (cardToSave.piConclusaoUp && !cardToSave.piUp) cardToSave.piUp = cardToSave.piConclusaoUp;
+        if (cardToSave.piUp && !cardToSave.piConclusaoUp) cardToSave.piConclusaoUp = cardToSave.piUp;
+        if (cardToSave.piConclusaoDown && !cardToSave.piDown) cardToSave.piDown = cardToSave.piConclusaoDown;
+        if (cardToSave.piDown && !cardToSave.piConclusaoDown) cardToSave.piConclusaoDown = cardToSave.piDown;
+
+        // 1. Atualiza imediatamente o array em memória (itemsRef) e grava no localStorage
+        const nextList = (itemsRef.current || []).map(item =>
+          String(item.id) === idStr ? { ...item, ...cardToSave } : item
+        );
+        if (!nextList.some(item => String(item.id) === idStr)) {
+          nextList.push(cardToSave);
+        }
+
+        itemsRef.current = nextList;
+        writeLocal(nextList);
+        setItems(nextList);
+
+        // 2. Persistência imediata no Supabase na coluna data (JSONB)
+        if (!sb) return;
+
+        const stampMs = new Date(nowIso).getTime();
+        if (!sentStamps.current[idStr]) sentStamps.current[idStr] = new Set();
+        sentStamps.current[idStr].add(stampMs);
+
+        isSaving = true;
+        savingCount++;
+        lastUpsertAt = Date.now();
+        setSyncState("saving");
+
+        try {
+          const { error } = await sb.from("initiatives").upsert({
+            id: idStr,
+            data: { ...cardToSave },
+            position: Number(cardToSave.position) || 0,
+            updated_at: nowIso
+          }, { onConflict: "id" });
+
+          if (error) {
+            console.error("Erro ao salvar iniciativa no Supabase:", error);
+            setSyncState("error");
+          } else {
+            setSyncState("online");
+          }
+        } catch (err) {
+          console.error("Exceção ao persistir no Supabase:", err);
+          setSyncState("error");
+        } finally {
+          savingCount = Math.max(0, savingCount - 1);
+          if (savingCount === 0) isSaving = false;
+          lastUpsertAt = Date.now();
+        }
+      };
+
+      const saveCardToSupabase = (item) => persistCardNow(item);
+
+      const persist = (id, immediate = false) => {
+        const idStr = String(id);
+        if (immediate) {
+          const latest = (itemsRef.current || []).find(i => String(i.id) === idStr) || (selectedItem && String(selectedItem.id) === idStr ? selectedItem : null);
+          if (latest) persistCardNow(latest);
+        } else {
+          clearTimeout(timers.current[idStr]);
+          timers.current[idStr] = setTimeout(() => {
+            delete timers.current[idStr];
+            const latest = (itemsRef.current || []).find(i => String(i.id) === idStr) || (selectedItem && String(selectedItem.id) === idStr ? selectedItem : null);
+            if (latest) persistCardNow(latest);
+          }, 300);
+        }
+      };
+
+      // Exclui permanentemente um item já criado (localStorage + Supabase)
+      const confirmDeleteItem = async () => {
+        if (!itemToDelete) return;
+        const id = String(itemToDelete.id);
+        clearTimeout(timers.current[id]);
+        delete timers.current[id];
+
+        const next = (itemsRef.current || []).filter(item => String(item.id) !== id);
+        itemsRef.current = next;
+        writeLocal(next);
+        setItems(next);
+
+        if (String(selectedId) === id) {
+          setSelectedId(null);
+        }
+        setItemToDelete(null);
+
+        if (sb) {
+          isSaving = true;
+          lastUpsertAt = Date.now();
+          setSyncState("saving");
+          try {
+            const { error } = await sb.from("initiatives").delete().eq("id", id);
+            if (error) {
+              console.error("Erro ao excluir iniciativa do Supabase:", error);
+              setSyncState("error");
+            } else {
+              setSyncState("online");
+            }
+          } finally {
+            isSaving = false;
+            lastUpsertAt = Date.now();
+          }
+        }
+      };
+
       // Atualiza múltiplos campos de um card e salva automaticamente (com auditoria)
       const updateItemFields = (id, patch, immediate = false) => {
-        setItems(prev => {
-          const next = prev.map(item => {
-            if (item.id !== id) return item;
-            let merged = { ...item, ...patch };
-            if (!Object.prototype.hasOwnProperty.call(patch, "comments")) {
-              const text = buildAuditText(item, patch);
-              if (text) {
-                const list = item.comments || [];
-                const first = list[0];
-                const now = Date.now();
-                if (first && first.isSystem && first.author === userName && first.auditKey === text && now - (first.ts || 0) < 120000) {
-                  merged.comments = [{ ...first, createdAt: formatNow(), ts: now }, ...list.slice(1)];
-                } else {
-                  merged.comments = [{
-                    id: `aud-${now}-${Math.random().toString(36).slice(2, 6)}`,
-                    text,
-                    createdAt: formatNow(),
-                    updatedAt: null,
-                    isSystem: true,
-                    author: userName,
-                    auditKey: text,
-                    ts: now
-                  }, ...list];
-                }
-              }
+        const idStr = String(id);
+        const current = (itemsRef.current || []).find(i => String(i.id) === idStr) || (selectedItem && String(selectedItem.id) === idStr ? selectedItem : null);
+        if (!current) return;
+
+        let merged = { ...current, ...patch };
+        if (!Object.prototype.hasOwnProperty.call(patch, "comments")) {
+          const text = buildAuditText(current, patch);
+          if (text) {
+            const list = current.comments || [];
+            const first = list[0];
+            const now = Date.now();
+            if (first && first.isSystem && first.author === userName && first.auditKey === text && now - (first.ts || 0) < 120000) {
+              merged.comments = [{ ...first, createdAt: formatNow(), ts: now }, ...list.slice(1)];
+            } else {
+              merged.comments = [{
+                id: `aud-${now}-${Math.random().toString(36).slice(2, 6)}`,
+                text,
+                createdAt: formatNow(),
+                updatedAt: null,
+                isSystem: true,
+                author: userName,
+                auditKey: text,
+                ts: now
+              }, ...list];
             }
-            return merged;
-          });
+          }
+        }
+
+        if (immediate) {
+          persistCardNow(merged);
+        } else {
+          const next = (itemsRef.current || []).map(item => String(item.id) === idStr ? merged : item);
           itemsRef.current = next;
-          return next;
-        });
-        persist(id, immediate);
+          setItems(next);
+          persist(idStr, false);
+        }
       };
 
       const updateItemField = (id, field, value, immediate = false) => {
+        let patch = { [field]: value };
         if (field === "pi") {
           if (PI_CYCLE_OPTIONS.includes(value)) {
-            updateItemFields(id, { pi: value, previousPi: value }, immediate);
-            return;
+            patch = { pi: value, previousPi: value };
+          } else if (value === "Backlog") {
+            patch = { pi: "Backlog" };
           }
-          if (value === "Backlog") {
-            updateItemFields(id, { pi: "Backlog" }, immediate);
-            return;
-          }
+        } else if (field === "productionDate" || field === "dataProducao") {
+          patch = { productionDate: value, dataProducao: value };
+        } else if (field === "piUp" || field === "piConclusaoUp") {
+          patch = { piUp: value, piConclusaoUp: value };
+        } else if (field === "piDown" || field === "piConclusaoDown") {
+          patch = { piDown: value, piConclusaoDown: value };
         }
-        if (field === "productionDate" || field === "dataProducao") {
-          updateItemFields(id, { productionDate: value, dataProducao: value }, immediate);
-          return;
-        }
-        if (field === "piUp" || field === "piConclusaoUp") {
-          updateItemFields(id, { piUp: value, piConclusaoUp: value }, immediate);
-          return;
-        }
-        if (field === "piDown" || field === "piConclusaoDown") {
-          updateItemFields(id, { piDown: value, piConclusaoDown: value }, immediate);
-          return;
-        }
-        updateItemFields(id, { [field]: value }, immediate);
+        updateItemFields(id, patch, immediate);
       };
 
       // Movimentação de Status (via Drag & Drop ou Seletor) com registro no histórico
       const moveCardStatus = (id, targetStatus) => {
-        const current = itemsRef.current.find(i => i.id === id);
+        const idStr = String(id);
+        const current = (itemsRef.current || []).find(i => String(i.id) === idStr) || (selectedItem && String(selectedItem.id) === idStr ? selectedItem : null);
         if (!current || current.status === targetStatus) return;
         const originStatus = current.status;
         const timestamp = formatNow();
@@ -8456,36 +8565,36 @@
             ? "Backlog"
             : (current.pi === "Backlog" ? savedPrevPi : current.pi);
 
-        updateItemFields(
-          id,
-          {
-            status: targetStatus,
-            pi: nextPi,
-            previousPi: savedPrevPi,
-            comments: updatedComments
-          },
-          true
-        );
+        const updatedCard = {
+          ...current,
+          status: targetStatus,
+          pi: nextPi,
+          previousPi: savedPrevPi,
+          comments: updatedComments
+        };
+        persistCardNow(updatedCard);
       };
 
       // Atualiza o link do Jira e extrai automaticamente o código AGDE-XXXX
       const handleJiraUrl = (id, url) => {
         const num = extractJiraNumber(url);
         if (num) {
-          updateItemFields(id, { jiraUrl: url, jira: `AGDE-${num}` });
+          updateItemFields(id, { jiraUrl: url, jira: `AGDE-${num}` }, true);
         } else {
-          updateItemFields(id, { jiraUrl: url });
+          updateItemFields(id, { jiraUrl: url }, true);
         }
       };
 
       // Alternar seleção em lista (Jornadas, Métricas, Owners)
       const toggleArrayItem = (id, field, value) => {
-        const current = itemsRef.current.find(i => i.id === id);
+        const idStr = String(id);
+        const current = (itemsRef.current || []).find(i => String(i.id) === idStr) || (selectedItem && String(selectedItem.id) === idStr ? selectedItem : null);
         if (!current) return;
         const list = Array.isArray(current[field]) ? current[field] : [];
         const exists = list.includes(value);
-        const updated = exists ? list.filter(v => v !== value) : [...list, value];
-        updateItemField(id, field, updated, true);
+        const updatedList = exists ? list.filter(v => v !== value) : [...list, value];
+        const updatedCard = { ...current, [field]: updatedList };
+        persistCardNow(updatedCard);
       };
 
       // Gestão de comentários
@@ -8503,7 +8612,7 @@
           ts: Date.now()
         };
         const updated = [commentObj, ...(selectedItem.comments || [])];
-        updateItemFields(selectedItem.id, { comments: updated }, true);
+        persistCardNow({ ...selectedItem, comments: updated });
         setNewComment("");
       };
 
@@ -8524,7 +8633,7 @@
           }
           return c;
         });
-        updateItemFields(selectedItem.id, { comments: updated }, true);
+        persistCardNow({ ...selectedItem, comments: updated });
         setEditingCommentId(null);
         setEditingCommentText("");
       };
@@ -8533,7 +8642,7 @@
       const handleDeleteComment = (commentId) => {
         if (!selectedItem) return;
         const updated = (selectedItem.comments || []).filter(c => c.id !== commentId);
-        updateItemFields(selectedItem.id, { comments: updated }, true);
+        persistCardNow({ ...selectedItem, comments: updated });
       };
 
       // Drag and Drop
@@ -9076,12 +9185,12 @@
                         { value: "sim", label: "Sim" },
                         { value: "nao", label: "Não" }
                       ].map(opt => {
-                        const isSelected = (selectedItem.macrotemas === opt.value) || (opt.value === "sim" && selectedItem.macrotemas === true);
+                        const isSelected = (selectedItem.macrotemas === opt.value) || (opt.value === "sim" && selectedItem.macrotemas === true) || (opt.value === "nao" && selectedItem.macrotemas === false);
                         return (
                           <button
                             key={opt.value}
                             type="button"
-                            onClick={() => updateItemField(selectedItem.id, "macrotemas", opt.value, true)}
+                            onClick={() => persistCardNow({ ...selectedItem, macrotemas: opt.value })}
                             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
                               isSelected
                                 ? "bg-indigo-600 text-white shadow-sm border border-indigo-600"
@@ -9100,7 +9209,7 @@
                     type="text"
                     value={selectedItem.title}
                     onChange={e => updateItemField(selectedItem.id, "title", e.target.value)}
-                    onBlur={() => persist(selectedItem.id, true)}
+                    onBlur={e => persistCardNow({ ...selectedItem, title: e.target.value })}
                     className="w-full text-base font-bold text-slate-900 leading-snug bg-transparent border-b border-transparent hover:border-slate-200 focus:border-indigo-500 focus:outline-none pb-1"
                   />
 
@@ -9126,7 +9235,7 @@
                               type="date"
                               disabled={locked}
                               value={selectedItem.startDate || ""}
-                              onChange={e => updateItemField(selectedItem.id, "startDate", e.target.value, true)}
+                              onChange={e => persistCardNow({ ...selectedItem, startDate: e.target.value })}
                               className="w-full text-xs font-semibold bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
                             />
                           </div>
@@ -9137,7 +9246,7 @@
                               disabled={locked}
                               min={selectedItem.startDate || undefined}
                               value={selectedItem.endDate || ""}
-                              onChange={e => updateItemField(selectedItem.id, "endDate", e.target.value, true)}
+                              onChange={e => persistCardNow({ ...selectedItem, endDate: e.target.value })}
                               className="w-full text-xs font-semibold bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
                             />
                           </div>
@@ -9146,7 +9255,7 @@
                             <select
                               disabled={locked}
                               value={selectedItem.sprints || ""}
-                              onChange={e => updateItemField(selectedItem.id, "sprints", e.target.value, true)}
+                              onChange={e => persistCardNow({ ...selectedItem, sprints: e.target.value })}
                               className="w-full text-xs font-semibold bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
                             >
                               <option value="">Não informado</option>
@@ -9195,7 +9304,7 @@
                             updateItemField(selectedItem.id, "jira", rawVal);
                           }
                         }}
-                        onBlur={() => persist(selectedItem.id, true)}
+                        onBlur={e => persistCardNow({ ...selectedItem, jira: e.target.value })}
                         className="w-32 text-xs font-bold text-indigo-700 bg-white border border-indigo-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500"
                       />
                       <input
@@ -9203,7 +9312,7 @@
                         placeholder="https://digitalfleury.atlassian.net/browse/AGDE-XXXX"
                         value={selectedItem.jiraUrl || ""}
                         onChange={e => handleJiraUrl(selectedItem.id, e.target.value)}
-                        onBlur={() => persist(selectedItem.id, true)}
+                        onBlur={e => persistCardNow({ ...selectedItem, jiraUrl: e.target.value })}
                         className="flex-1 text-xs bg-white border border-indigo-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500"
                       />
                     </div>
@@ -9355,7 +9464,7 @@
                           rows={4}
                           value={selectedItem.description}
                           onChange={e => updateItemField(selectedItem.id, "description", e.target.value)}
-                          onBlur={() => persist(selectedItem.id, true)}
+                          onBlur={e => persistCardNow({ ...selectedItem, description: e.target.value })}
                           placeholder="Insira os detalhes técnicos, requisitos de design ou alinhamentos com a equipe..."
                           className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-indigo-500"
                         />
@@ -9468,7 +9577,7 @@
                             rows={3}
                             value={selectedItem.deprioritizedReason || ""}
                             onChange={e => updateItemField(selectedItem.id, "deprioritizedReason", e.target.value)}
-                            onBlur={() => persist(selectedItem.id, true)}
+                            onBlur={e => persistCardNow({ ...selectedItem, deprioritizedReason: e.target.value })}
                             placeholder="Por que esta iniciativa foi despriorizada ou cancelada?"
                             className="w-full text-xs bg-white border border-rose-200 rounded-lg p-2.5 focus:outline-none focus:border-rose-500"
                           />
@@ -9646,7 +9755,7 @@
                                     key={opt.value}
                                     type="button"
                                     disabled={!isCardDone}
-                                    onClick={() => updateItemField(selectedItem.id, "acompanhaDados", opt.value, true)}
+                                    onClick={() => persistCardNow({ ...selectedItem, acompanhaDados: opt.value })}
                                     className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 ${
                                       isSelected
                                         ? "bg-indigo-600 text-white shadow-sm border border-indigo-600"
@@ -9669,7 +9778,7 @@
                               <select
                                 disabled={!isCardDone}
                                 value={selectedItem.piConclusaoUp || selectedItem.piUp || ""}
-                                onChange={e => updateItemField(selectedItem.id, "piConclusaoUp", e.target.value, true)}
+                                onChange={e => persistCardNow({ ...selectedItem, piConclusaoUp: e.target.value, piUp: e.target.value })}
                                 className="w-full text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
                               >
                                 <option value="">Não concluído / N/A</option>
@@ -9686,7 +9795,7 @@
                               <select
                                 disabled={!isCardDone}
                                 value={selectedItem.piConclusaoDown || selectedItem.piDown || ""}
-                                onChange={e => updateItemField(selectedItem.id, "piConclusaoDown", e.target.value, true)}
+                                onChange={e => persistCardNow({ ...selectedItem, piConclusaoDown: e.target.value, piDown: e.target.value })}
                                 className="w-full text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
                               >
                                 <option value="">Não concluído / N/A</option>
@@ -9704,7 +9813,7 @@
                                 type="date"
                                 disabled={!isCardDone}
                                 value={selectedItem.productionDate || selectedItem.dataProducao || ""}
-                                onChange={e => updateItemField(selectedItem.id, "productionDate", e.target.value, true)}
+                                onChange={e => persistCardNow({ ...selectedItem, productionDate: e.target.value, dataProducao: e.target.value })}
                                 className="w-full text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
                               />
                             </div>
@@ -9721,7 +9830,7 @@
                               placeholder="Descreva o impacto real para o paciente ou negócio..."
                               value={selectedItem.problemSolved || ""}
                               onChange={e => updateItemField(selectedItem.id, "problemSolved", e.target.value)}
-                              onBlur={() => persist(selectedItem.id, true)}
+                              onBlur={e => persistCardNow({ ...selectedItem, problemSolved: e.target.value })}
                               className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
                             />
                           </div>
@@ -9736,7 +9845,7 @@
                               placeholder="Ex: Taxa de sucesso na busca de unidades e avanço para Dia/Hora..."
                               value={selectedItem.whatToMeasure || ""}
                               onChange={e => updateItemField(selectedItem.id, "whatToMeasure", e.target.value)}
-                              onBlur={() => persist(selectedItem.id, true)}
+                              onBlur={e => persistCardNow({ ...selectedItem, whatToMeasure: e.target.value })}
                               className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
                             />
                           </div>
@@ -9751,7 +9860,7 @@
                               placeholder="Ex: Aumento de +4.2% na conversão da etapa de unidades no VWO..."
                               value={selectedItem.achievedResult || ""}
                               onChange={e => updateItemField(selectedItem.id, "achievedResult", e.target.value)}
-                              onBlur={() => persist(selectedItem.id, true)}
+                              onBlur={e => persistCardNow({ ...selectedItem, achievedResult: e.target.value })}
                               className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
                             />
                           </div>
