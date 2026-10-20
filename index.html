@@ -204,6 +204,27 @@
       error: "error"
     };
 
+    // Planejamento: colunas onde Datas/Sprints ficam bloqueadas e o semáforo de prazo não aparece
+    const PLANNING_LOCKED_STATUSES = ["Backlog", "Concluído", "Concluídos", "Despriorizado", "Despriorizados"];
+    const DONE_STATUSES = ["Concluído", "Concluídos"];
+    const SPRINT_OPTIONS = ["1 Sprint", "2 Sprints", "3 Sprints", "4 Sprints", "5 Sprints"];
+
+    // "Acompanha dados?" (sessão Produção e Resultado)
+    const ACOMPANHA_OPTIONS = [
+      { value: "sim", label: "SIM" },
+      { value: "nao", label: "NÃO" },
+      { value: "a_definir", label: "A DEFINIR" }
+    ];
+    const ACOMPANHA_LABEL = { sim: "Sim", nao: "Não", a_definir: "A definir" };
+    const ACOMPANHA_BADGE = {
+      sim: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      nao: "bg-rose-50 text-rose-700 border-rose-200",
+      a_definir: "bg-amber-50 text-amber-700 border-amber-200"
+    };
+
+    // Jira: base da URL gerada automaticamente
+    const JIRA_BROWSE_BASE = "https://digitalfleury.atlassian.net/browse/AGDE-";
+
     // ==========================================
     // BASE DE DADOS COMPLETA (156 INICIATIVAS)
     // ==========================================
@@ -7009,7 +7030,9 @@
           };
         }
         return {
-          id: c.id || `c-${itemId}-${idx}-${Date.now()}`,
+          ...c,
+          // ID determinístico (sem Date.now) para não mudar a cada normalização e não "sumir" da tela
+          id: c.id || `c-${itemId}-${idx}`,
           text: c.text || "",
           createdAt: c.createdAt || formatNow(),
           updatedAt: c.updatedAt || null,
@@ -7035,7 +7058,55 @@
       return STATUS_LIST.includes(mapped) ? mapped : "Backlog";
     }
 
-    function normalizeItem(raw, idx = 0) {
+    // ==========================================
+    // JIRA: EXTRAÇÃO DO NÚMERO E URL AUTOMÁTICA (AGDE-XXXX)
+    // ==========================================
+    function extractJiraNumber(value) {
+      if (value === null || value === undefined) return null;
+      const m = String(value).match(/(\d+)/);
+      return m ? m[1] : null;
+    }
+
+    function buildJiraUrl(num) {
+      return num ? `${JIRA_BROWSE_BASE}${num}` : "";
+    }
+
+    // Macrotemas: aceita legado booleano e retorna sempre 'sim' | 'nao' (padrão 'nao')
+    function normalizeMacrotemas(val) {
+      return val === true || val === "sim" || val === "true" ? "sim" : "nao";
+    }
+    function isMacrotemas(item) {
+      return normalizeMacrotemas(item && item.macrotemas) === "sim";
+    }
+
+    function isPlanningLocked(status) {
+      return PLANNING_LOCKED_STATUSES.includes(status);
+    }
+    function isDoneStatus(status) {
+      return DONE_STATUSES.includes(status);
+    }
+
+    // Semáforo de prazo: diferença em dias corridos entre endDate e hoje (ambos às 00:00:00)
+    function getDeadlineInfo(endDate) {
+      const m = String(endDate || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return null;
+      const end = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+      end.setHours(0, 0, 0, 0);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const diffDays = Math.round((end.getTime() - today.getTime()) / 86400000);
+      if (diffDays >= 4) {
+        return { diffDays, label: "Dentro do prazo", dot: "bg-emerald-500", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" };
+      }
+      if (diffDays >= 0) {
+        return { diffDays, label: "Prazo acabando", dot: "bg-amber-500", cls: "bg-amber-50 text-amber-700 border-amber-200" };
+      }
+      return { diffDays, label: "Em atraso", dot: "bg-rose-500", cls: "bg-rose-50 text-rose-700 border-rose-200" };
+    }
+
+    // Normaliza um card SEM descartar propriedades: o spread (...raw) preserva qualquer campo novo/antigo
+    function normalizeCard(raw, idx = 0) {
+      raw = raw || {};
       const status = normalizeStatus(raw.status);
       const parsedPi = normalizePI(raw.pi, raw.cycle);
       const previousPi = PI_CYCLE_OPTIONS.includes(raw.previousPi)
@@ -7046,11 +7117,13 @@
         : (status === "Backlog" ? "Backlog" : previousPi);
       const piUp = raw.piUp ? normalizePI(raw.piUp) : "";
       const piDown = raw.piDown ? normalizePI(raw.piDown) : "";
+      const jiraNum = extractJiraNumber(raw.jira) || extractJiraNumber(parseJiraCode(raw.jiraUrl));
+      const productionDate = normalizeDateToISO(raw.productionDate || raw.dataProducao);
       return {
         ...raw,
         id: String(raw.id || Date.now() + idx),
-        jira: raw.jira || "AGDE-",
-        jiraUrl: raw.jiraUrl || "",
+        jira: jiraNum ? `AGDE-${jiraNum}` : (raw.jira || "AGDE-"),
+        jiraUrl: jiraNum ? buildJiraUrl(jiraNum) : (raw.jiraUrl || ""),
         pi,
         previousPi,
         status,
@@ -7063,15 +7136,25 @@
         comments: normalizeComments(raw.comments, raw.id || idx),
         piUp: PI_OPTIONS.includes(piUp) ? piUp : "",
         piDown: PI_OPTIONS.includes(piDown) ? piDown : "",
-        productionDate: normalizeDateToISO(raw.productionDate),
+        // Data de produção/conclusão: 100% manual (productionDate é o campo canônico; dataProducao é espelho)
+        productionDate,
+        dataProducao: productionDate,
         whatToMeasure: raw.whatToMeasure || "",
         problemSolved: raw.problemSolved || "",
         achievedResult: raw.achievedResult || "",
         deprioritizedReason: raw.deprioritizedReason || "",
-        macrotemas: Boolean(raw.macrotemas),
-        position: typeof raw.position === "number" ? raw.position : idx
+        macrotemas: normalizeMacrotemas(raw.macrotemas),
+        startDate: normalizeDateToISO(raw.startDate),
+        endDate: normalizeDateToISO(raw.endDate),
+        sprints: SPRINT_OPTIONS.includes(raw.sprints) ? raw.sprints : "",
+        acompanhaDados: ACOMPANHA_LABEL[raw.acompanhaDados] ? raw.acompanhaDados : "",
+        position: Number.isFinite(Number(raw.position)) && raw.position !== null && raw.position !== ""
+          ? Number(raw.position)
+          : idx
       };
     }
+    // Alias mantido por compatibilidade com o restante do código
+    const normalizeItem = normalizeCard;
 
     // Extrai o código "AGDE-1234" automaticamente a partir da URL colada
     function parseJiraCode(url) {
@@ -7087,6 +7170,55 @@
       ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY)
       : null;
     const LOCAL_KEY = "ad_ux_ops_items_v4";
+
+    // ------------------------------------------
+    // TRAVA ANTI-CONCORRÊNCIA (Realtime / Polling)
+    // ------------------------------------------
+    let isSaving = false;          // true enquanto houver upsert em curso
+    let savingCount = 0;           // contador de upserts simultâneos
+    let lastUpsertAt = 0;          // timestamp do último upsert (início/fim)
+    let activeCardId = null;       // id do card aberto no modal de detalhes (null = fechado)
+    const SAVE_GUARD_MS = 1500;    // janela pós-upsert em que atualizações remotas são ignoradas
+
+    function isRemoteUpdateBlocked() {
+      return isSaving || (Date.now() - lastUpsertAt) < SAVE_GUARD_MS;
+    }
+    function isModalOpen() {
+      return activeCardId !== null;
+    }
+
+    // Serialização completa: TODAS as propriedades do card vão para a coluna data (jsonb)
+    function toSupabaseRow(card) {
+      return {
+        id: String(card.id),
+        data: { ...card },
+        position: Number(card.position) || 0,
+        updated_at: new Date().toISOString()
+      };
+    }
+
+    // Desserialização completa: spread de row.data + colunas id/position
+    function fromSupabaseRow(row, idx = 0) {
+      const data = row && row.data && typeof row.data === "object" ? row.data : {};
+      return normalizeCard(
+        {
+          ...data,
+          id: String(row.id),
+          position: row.position !== null && row.position !== undefined && Number.isFinite(Number(row.position))
+            ? Number(row.position)
+            : idx
+        },
+        idx
+      );
+    }
+
+    function writeLocal(list) {
+      try {
+        localStorage.setItem(LOCAL_KEY, JSON.stringify(list));
+      } catch (e) {
+        console.warn("Erro ao salvar no localStorage:", e);
+      }
+    }
 
     function loadLocal() {
       const candidateKeys = [LOCAL_KEY, "ad_ux_ops_items_v3", "ad_ux_ops_items"];
@@ -7151,25 +7283,303 @@
       }
     }
 
-    // Exibe o código Jira; quando possui URL cadastrada, vira link clicável que abre em nova aba
+    // Exibe o código Jira como link clicável (URL gerada automaticamente a partir do número AGDE-XXXX).
+    // stopPropagation: abre o Jira sem abrir o modal; draggable=false: não interfere no drag-and-drop do card.
     function JiraLink({ item }) {
       if (!item) return null;
       const code = item.jira || "AGDE-";
-      if (!item.jiraUrl) {
+      const url = item.jiraUrl || buildJiraUrl(extractJiraNumber(code));
+      if (!url) {
         return <span>{code}</span>;
       }
       return (
         <a
-          href={item.jiraUrl}
+          href={url}
           target="_blank"
           rel="noopener noreferrer"
+          draggable={false}
           onClick={e => e.stopPropagation()}
+          onMouseDown={e => e.stopPropagation()}
           title={`Abrir ${code} no Jira em nova aba`}
           className="underline decoration-dotted hover:decoration-solid inline-flex items-center gap-0.5 hover:text-indigo-800"
         >
           <span>{code}</span>
           <MIcon name="open_in_new" className="text-[12px]" />
         </a>
+      );
+    }
+
+    // Hook: número de colunas do grid do repositório (1 / 2 / 3) conforme a largura da tela
+    function useGridColumns() {
+      const calc = () => {
+        const w = typeof window !== "undefined" ? window.innerWidth : 1280;
+        if (w >= 1024) return 3;
+        if (w >= 768) return 2;
+        return 1;
+      };
+      const [cols, setCols] = useState(calc);
+      useEffect(() => {
+        const onResize = () => setCols(calc());
+        window.addEventListener("resize", onResize);
+        return () => window.removeEventListener("resize", onResize);
+      }, []);
+      return cols;
+    }
+
+    // ==========================================
+    // COMPONENTE: REPOSITÓRIO DE RESULTADOS & INICIATIVAS CONCLUÍDAS
+    // Busca local + ordenação por Data de produção/conclusão (manual) + filtro "Acompanha dados?" + paginação (4 linhas)
+    // ==========================================
+    const REPO_ROWS_PER_PAGE = 4;
+
+    function ResultsRepository({ completedItems, onOpenItem }) {
+      const [repoSearch, setRepoSearch] = useState("");
+      const [repoSort, setRepoSort] = useState("newest"); // 'newest' | 'oldest'
+      const [repoAcompanha, setRepoAcompanha] = useState("todos"); // 'todos' | 'sim' | 'nao' | 'a_definir'
+      const [page, setPage] = useState(1);
+      const cols = useGridColumns();
+      const pageSize = cols * REPO_ROWS_PER_PAGE;
+
+      // Sempre que pesquisar / filtrar / ordenar: volta para a página 1
+      useEffect(() => { setPage(1); }, [repoSearch, repoSort, repoAcompanha]);
+
+      const filtered = useMemo(() => {
+        const q = repoSearch.trim().toLowerCase();
+        const list = completedItems.filter(item => {
+          if (repoAcompanha !== "todos" && (item.acompanhaDados || "") !== repoAcompanha) return false;
+          if (!q) return true;
+          const haystack = [
+            item.title, item.jira, item.pi, item.piUp, item.piDown, item.description,
+            item.problemSolved, item.achievedResult, item.whatToMeasure, item.brand, item.type,
+            formatISOToBR(item.productionDate), ACOMPANHA_LABEL[item.acompanhaDados]
+          ].filter(Boolean).join(" ").toLowerCase();
+          return haystack.includes(q);
+        });
+        // Ordena pela Data de produção/conclusão preenchida manualmente; sem data ficam agrupados no final
+        const withDate = list.filter(i => /^\d{4}-\d{2}-\d{2}$/.test(i.productionDate || ""));
+        const withoutDate = list.filter(i => !/^\d{4}-\d{2}-\d{2}$/.test(i.productionDate || ""));
+        withDate.sort((a, b) =>
+          repoSort === "newest"
+            ? b.productionDate.localeCompare(a.productionDate)
+            : a.productionDate.localeCompare(b.productionDate)
+        );
+        return [...withDate, ...withoutDate];
+      }, [completedItems, repoSearch, repoSort, repoAcompanha]);
+
+      const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+      const currentPage = Math.min(page, totalPages);
+      const startIdx = (currentPage - 1) * pageSize;
+      const pageItems = filtered.slice(startIdx, startIdx + pageSize);
+      const endIdx = startIdx + pageItems.length;
+
+      return (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="p-5 bg-indigo-950 text-white flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h3 className="text-sm font-bold">Repositório de Resultados &amp; Iniciativas Concluídas</h3>
+              <p className="text-xs text-indigo-200 mt-0.5">
+                Clique em qualquer card abaixo para abrir ou editar os indicadores de Produção e Resultado.
+              </p>
+            </div>
+            <span className="text-xs font-bold bg-indigo-800/90 border border-indigo-700 px-3 py-1.5 rounded-lg">
+              {completedItems.length} entregas concluídas
+            </span>
+          </div>
+
+          {/* Barra de busca local + Ordenação + Filtro "Acompanha dados?" */}
+          <div className="px-5 pt-4 pb-1 flex flex-wrap items-center gap-3">
+            <div className="relative flex-1 min-w-[220px] max-w-md">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 flex items-center pointer-events-none">
+                <MIcon name="search" className="text-[16px]" />
+              </span>
+              <input
+                id="repo-search"
+                type="text"
+                value={repoSearch}
+                onChange={e => setRepoSearch(e.target.value)}
+                placeholder="Buscar concluídos por título, AGDE, PI, descrição..."
+                className="w-full pl-9 pr-8 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+              />
+              {repoSearch && (
+                <button
+                  type="button"
+                  onClick={() => setRepoSearch("")}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 flex items-center"
+                >
+                  <MIcon name="close" className="text-[15px]" />
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1">
+              <span className="text-xs font-medium text-slate-500 mr-1">Ordenar:</span>
+              {[
+                { value: "newest", label: "Mais novos primeiro" },
+                { value: "oldest", label: "Mais antigos primeiro" }
+              ].map(opt => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setRepoSort(opt.value)}
+                  className={`px-2 py-1 rounded-md text-xs font-semibold transition ${
+                    repoSort === opt.value
+                      ? "bg-indigo-600 text-white"
+                      : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="h-4 w-px bg-slate-200 hidden sm:block"></div>
+
+            <div className="flex items-center gap-1">
+              <span className="text-xs font-medium text-slate-500 mr-1">Acompanha dados?</span>
+              {[
+                { value: "todos", label: "Todos" },
+                { value: "sim", label: "Sim" },
+                { value: "nao", label: "Não" },
+                { value: "a_definir", label: "A definir" }
+              ].map(opt => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setRepoAcompanha(opt.value)}
+                  className={`px-2 py-1 rounded-md text-xs font-semibold transition ${
+                    repoAcompanha === opt.value
+                      ? "bg-slate-900 text-white"
+                      : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <p className="px-5 text-[11px] text-slate-400">
+            Ordenação pela Data de produção/conclusão preenchida manualmente. Cards sem data ficam ao final da lista.
+          </p>
+
+          {pageItems.length === 0 ? (
+            <div className="m-5 text-center py-10 text-xs text-slate-400 border border-dashed border-slate-200 rounded-xl">
+              Nenhuma iniciativa concluída encontrada para os filtros aplicados.
+            </div>
+          ) : (
+            <div className="p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {pageItems.map(item => (
+                <div
+                  key={item.id}
+                  onClick={() => onOpenItem(item, "resultados")}
+                  className="bg-slate-50/70 hover:bg-white rounded-xl border border-slate-200 p-4 shadow-sm hover:shadow-md hover:border-teal-400 transition cursor-pointer flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-xs font-bold text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
+                          <JiraLink item={item} />
+                        </span>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${PI_COLORS[item.pi] || "bg-slate-100"}`}>
+                          {item.pi}
+                        </span>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${TYPE_BADGE[item.type] || "bg-slate-100 text-slate-600 border-slate-200"}`}>
+                          {item.type}
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-slate-500 font-medium inline-flex items-center gap-1 flex-shrink-0">
+                        {item.productionDate ? (
+                          <>
+                            <MIcon name="rocket_launch" className="text-[14px] text-teal-600" />
+                            <span>Prod: {formatISOToBR(item.productionDate)}</span>
+                          </>
+                        ) : (
+                          "Sem data"
+                        )}
+                      </span>
+                    </div>
+
+                    {/* Tag "Acompanha dados?" */}
+                    <div className="mb-2">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded border inline-flex items-center gap-1 ${
+                        ACOMPANHA_BADGE[item.acompanhaDados] || "bg-slate-100 text-slate-500 border-slate-200"
+                      }`}>
+                        <MIcon name="monitoring" className="text-[12px]" />
+                        <span>Acompanha dados: {ACOMPANHA_LABEL[item.acompanhaDados] || "Não informado"}</span>
+                      </span>
+                    </div>
+
+                    <h4 className="text-xs font-bold text-slate-900 mb-2 line-clamp-2">
+                      {item.title}
+                    </h4>
+
+                    <div className="bg-white p-2.5 rounded-lg border border-slate-200/70 mb-2">
+                      <span className="text-[10px] font-bold uppercase text-slate-400 block mb-0.5">
+                        Problema Resolvido / Escopo
+                      </span>
+                      <p className="text-xs text-slate-700 line-clamp-2">
+                        {item.problemSolved || item.description}
+                      </p>
+                    </div>
+
+                    {item.achievedResult && (
+                      <div className="bg-teal-50/70 p-2.5 rounded-lg border border-teal-200/70 mb-2">
+                        <span className="text-[10px] font-bold uppercase text-teal-700 block mb-0.5">
+                          Resultado Alcançado
+                        </span>
+                        <p className="text-xs text-teal-900 font-medium line-clamp-2">
+                          {item.achievedResult}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-[11px]">
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-500">UP: <strong>{item.piUp || "-"}</strong></span>
+                      <span className="text-slate-300">•</span>
+                      <span className="text-slate-500">DOWN: <strong>{item.piDown || "-"}</strong></span>
+                    </div>
+                    <span className="text-[10px] font-semibold text-slate-500">{item.brand}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Paginação (máx. 4 linhas de cards por página) */}
+          <div className="px-5 pb-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+            <span className="text-xs text-slate-500">
+              {filtered.length === 0
+                ? "0 itens"
+                : <>Exibindo <strong className="text-slate-800">{startIdx + 1}–{endIdx}</strong> de <strong className="text-slate-800">{filtered.length}</strong> itens</>}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                id="repo-prev-page"
+                type="button"
+                disabled={currentPage <= 1}
+                onClick={() => setPage(p => Math.max(1, Math.min(p, totalPages) - 1))}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1"
+              >
+                <MIcon name="chevron_left" className="text-[16px]" />
+                <span>Anterior</span>
+              </button>
+              <span className="text-xs font-bold text-slate-700 px-2">
+                Página {currentPage} de {totalPages}
+              </span>
+              <button
+                id="repo-next-page"
+                type="button"
+                disabled={currentPage >= totalPages}
+                onClick={() => setPage(p => Math.min(totalPages, Math.min(p, totalPages) + 1))}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1"
+              >
+                <span>Próxima</span>
+                <MIcon name="chevron_right" className="text-[16px]" />
+              </button>
+            </div>
+          </div>
+        </div>
       );
     }
 
@@ -7534,89 +7944,8 @@
             </div>
           </div>
 
-          {/* VITRINE DE RESULTADOS E ENTREGAS EM PRODUÇÃO */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="p-5 bg-indigo-950 text-white flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <h3 className="text-sm font-bold">Repositório de Resultados & Iniciativas Concluídas</h3>
-                <p className="text-xs text-indigo-200 mt-0.5">
-                  Clique em qualquer card abaixo para abrir ou editar os indicadores de Produção e Resultado.
-                </p>
-              </div>
-              <span className="text-xs font-bold bg-indigo-800/90 border border-indigo-700 px-3 py-1.5 rounded-lg">
-                {analytics.completedItems.length} entregas concluídas
-              </span>
-            </div>
-
-            <div className="p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {analytics.completedItems.map(item => (
-                <div
-                  key={item.id}
-                  onClick={() => onOpenItem(item, "resultados")}
-                  className="bg-slate-50/70 hover:bg-white rounded-xl border border-slate-200 p-4 shadow-sm hover:shadow-md hover:border-teal-400 transition cursor-pointer flex flex-col justify-between"
-                >
-                  <div>
-                    <div className="flex items-center justify-between gap-2 mb-2">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs font-bold text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
-                          <JiraLink item={item} />
-                        </span>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${PI_COLORS[item.pi] || "bg-slate-100"}`}>
-                          {item.pi}
-                        </span>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${TYPE_BADGE[item.type] || "bg-slate-100 text-slate-600 border-slate-200"}`}>
-                          {item.type}
-                        </span>
-                      </div>
-                      <span className="text-[11px] text-slate-500 font-medium inline-flex items-center gap-1">
-                        {item.productionDate ? (
-                          <>
-                            <MIcon name="rocket_launch" className="text-[14px] text-teal-600" />
-                            <span>Prod: {formatISOToBR(item.productionDate)}</span>
-                          </>
-                        ) : (
-                          "Concluído"
-                        )}
-                      </span>
-                    </div>
-
-                    <h4 className="text-xs font-bold text-slate-900 mb-2 line-clamp-2">
-                      {item.title}
-                    </h4>
-
-                    <div className="bg-white p-2.5 rounded-lg border border-slate-200/70 mb-2">
-                      <span className="text-[10px] font-bold uppercase text-slate-400 block mb-0.5">
-                        Problema Resolvido / Escopo
-                      </span>
-                      <p className="text-xs text-slate-700 line-clamp-2">
-                        {item.problemSolved || item.description}
-                      </p>
-                    </div>
-
-                    {item.achievedResult && (
-                      <div className="bg-teal-50/70 p-2.5 rounded-lg border border-teal-200/70 mb-2">
-                        <span className="text-[10px] font-bold uppercase text-teal-700 block mb-0.5">
-                          Resultado Alcançado
-                        </span>
-                        <p className="text-xs text-teal-900 font-medium line-clamp-2">
-                          {item.achievedResult}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-[11px]">
-                    <div className="flex items-center gap-2">
-                      <span className="text-slate-500">UP: <strong>{item.piUp || "-"}</strong></span>
-                      <span className="text-slate-300">•</span>
-                      <span className="text-slate-500">DOWN: <strong>{item.piDown || "-"}</strong></span>
-                    </div>
-                    <span className="text-[10px] font-semibold text-slate-500">{item.brand}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+          {/* REPOSITÓRIO DE RESULTADOS & INICIATIVAS CONCLUÍDAS (busca, ordenação, filtro e paginação) */}
+          <ResultsRepository completedItems={analytics.completedItems} onOpenItem={onOpenItem} />
         </div>
       );
     }
