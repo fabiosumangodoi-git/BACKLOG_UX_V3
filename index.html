@@ -57,6 +57,20 @@
   </script>
 
   <script type="text/babel">
+    const OWNER_NAMES = {
+      JO: 'Jefferson',
+      CS: 'Carlos',
+      ML: 'Murillo',
+      PA: 'Paulo',
+      FG: 'Fábio',
+      Carlos: 'Carlos',
+      'Fábio': 'Fábio',
+      Jefferson: 'Jefferson',
+      Murillo: 'Murillo',
+      Paulo: 'Paulo'
+    };
+    window.OWNER_NAMES = OWNER_NAMES;
+
     const { useState, useMemo, useRef, useEffect, Component } = React;
 
     // ==========================================
@@ -87,20 +101,6 @@
       { value: "UP e DOWN", label: "UP e DOWN" }
     ];
     const OWNERS_ALL = ["JO", "CS", "ML", "PA", "FG"];
-    const OWNER_NAMES = ['Carlos', 'Fábio', 'Jefferson', 'Murillo', 'Paulo'];
-    Object.assign(OWNER_NAMES, {
-      "CS": "Carlos",
-      "FG": "Fábio",
-      "JO": "Jefferson",
-      "ML": "Murillo",
-      "PA": "Paulo",
-      "Carlos": "Carlos",
-      "Fábio": "Fábio",
-      "Jefferson": "Jefferson",
-      "Murillo": "Murillo",
-      "Paulo": "Paulo"
-    });
-    window.OWNER_NAMES = OWNER_NAMES;
 
     const JOURNEY_OPTIONS = [
       "Home",
