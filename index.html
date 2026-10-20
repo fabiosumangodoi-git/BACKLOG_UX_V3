@@ -87,6 +87,20 @@
       { value: "UP e DOWN", label: "UP e DOWN" }
     ];
     const OWNERS_ALL = ["JO", "CS", "ML", "PA", "FG"];
+    const OWNER_NAMES = ['Carlos', 'Fábio', 'Jefferson', 'Murillo', 'Paulo'];
+    Object.assign(OWNER_NAMES, {
+      "CS": "Carlos",
+      "FG": "Fábio",
+      "JO": "Jefferson",
+      "ML": "Murillo",
+      "PA": "Paulo",
+      "Carlos": "Carlos",
+      "Fábio": "Fábio",
+      "Jefferson": "Jefferson",
+      "Murillo": "Murillo",
+      "Paulo": "Paulo"
+    });
+    window.OWNER_NAMES = OWNER_NAMES;
 
     const JOURNEY_OPTIONS = [
       "Home",
@@ -167,8 +181,14 @@
       "CS": "bg-emerald-600",
       "ML": "bg-purple-600",
       "PA": "bg-pink-600",
-      "FG": "bg-amber-500"
+      "FG": "bg-amber-500",
+      "Jefferson": "bg-blue-600",
+      "Carlos": "bg-emerald-600",
+      "Murillo": "bg-purple-600",
+      "Paulo": "bg-pink-600",
+      "Fábio": "bg-amber-500"
     };
+    window.OWNER_COLORS = OWNER_COLORS;
 
     const STREAM_BADGE = {
       "UP": "bg-amber-100 text-amber-800 border-amber-200",
