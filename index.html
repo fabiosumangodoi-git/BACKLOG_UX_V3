@@ -9375,12 +9375,28 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                   </div>
 
                   {/* Título editável */}
-                  <input
-                    type="text"
-                    value={selectedItem.title}
-                    onChange={e => updateItemField(selectedItem.id, "title", e.target.value)}
+                  <textarea
+                    rows={2}
+                    value={selectedItem.title || ""}
+                    onChange={e => {
+                      updateItemField(selectedItem.id, "title", e.target.value);
+                      e.target.style.height = "auto";
+                      e.target.style.height = `${e.target.scrollHeight}px`;
+                    }}
                     onBlur={e => persistCardNow({ ...selectedItem, title: e.target.value })}
-                    className="w-full text-base font-bold text-slate-900 leading-snug bg-transparent border-b border-transparent hover:border-slate-200 focus:border-indigo-500 focus:outline-none pb-1"
+                    ref={el => {
+                      if (el) {
+                        el.style.height = "auto";
+                        el.style.height = `${el.scrollHeight}px`;
+                      }
+                    }}
+                    className="w-full text-base font-bold text-slate-900 leading-snug bg-transparent border-b border-transparent hover:border-slate-200 focus:border-indigo-500 focus:outline-none pb-1 resize-none whitespace-normal break-words"
+                    style={{
+                      whiteSpace: "normal",
+                      wordWrap: "break-word",
+                      overflowWrap: "break-word",
+                      resize: "none"
+                    }}
                   />
 
                   {/* Planejamento de Prazo & Sprints (Bloqueado em Backlog, Concluído e Despriorizado) */}
