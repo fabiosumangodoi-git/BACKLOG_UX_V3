@@ -279,6 +279,22 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
       "Melhoria": "bg-emerald-600 text-white border-emerald-600 shadow-sm"
     };
 
+    const TYPE_BORDER_COLOR = {
+      "Discovery": "#C026D3",
+      "História": "#2563EB",
+      "Melhoria": "#10B981"
+    };
+
+    function getCardTypeBorderColor(type) {
+      if (!type) return "transparent";
+      if (TYPE_BORDER_COLOR[type]) return TYPE_BORDER_COLOR[type];
+      const normalized = String(type).trim().toLowerCase();
+      if (normalized === "discovery") return "#C026D3";
+      if (normalized === "história" || normalized === "historia") return "#2563EB";
+      if (normalized === "melhoria") return "#10B981";
+      return "transparent";
+    }
+
     const SYNC_LABEL = {
       local: "Salvo no navegador",
       connecting: "Conectando ao banco...",
@@ -7629,7 +7645,10 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                   <div
                     key={item.id}
                     onClick={() => onOpenItem(item, "resultados")}
-                    className="bg-slate-50/70 hover:bg-white rounded-xl border border-slate-200 p-4 shadow-sm hover:shadow-md hover:border-teal-400 transition cursor-pointer flex flex-col justify-between"
+                    className="bg-slate-50/70 hover:bg-white rounded-xl border border-slate-200 p-4 shadow-sm hover:shadow-md hover:border-teal-400 transition cursor-pointer flex flex-col justify-between overflow-hidden"
+                    style={{
+                      borderLeft: `4px solid ${getCardTypeBorderColor(item.type)}`
+                    }}
                   >
                     <div>
                       {/* 1. Indicador Visual de Macrotemas e Badge de Iniciais do Owner no Topo Absoluto */}
@@ -9132,12 +9151,9 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                     >
                       {/* Cabeçalho da Coluna */}
                       <div className="p-3.5 flex items-center justify-between border-b border-slate-200/60 bg-white/50 rounded-t-2xl">
-                        <div className="flex items-center gap-2">
-                          <span className="w-2.5 h-2.5 rounded-full bg-slate-400" />
-                          <h2 className="text-xs font-bold text-slate-800 tracking-wide uppercase">
-                            {status}
-                          </h2>
-                        </div>
+                        <h2 className="text-xs font-bold text-slate-800 tracking-wide uppercase">
+                          {status}
+                        </h2>
                         <span className="text-[11px] font-bold text-slate-500 bg-white px-2 py-0.5 rounded-md border border-slate-200 shadow-sm">
                           {colItems.length}
                         </span>
@@ -9157,9 +9173,12 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                               onDragStart={e => handleDragStart(e, item)}
                               onDragEnd={handleDragEnd}
                               onClick={() => setSelectedItem(item)}
-                              className={`group bg-white rounded-xl border border-slate-200 p-3 shadow-sm hover:shadow-md hover:border-indigo-400 transition cursor-pointer select-none ${
+                              className={`group bg-white rounded-xl border border-slate-200 p-3 shadow-sm hover:shadow-md hover:border-indigo-400 transition cursor-pointer select-none overflow-hidden ${
                                 draggedItemId === item.id ? "opacity-30 scale-95" : ""
                               }`}
+                              style={{
+                                borderLeft: `4px solid ${getCardTypeBorderColor(item.type)}`
+                              }}
                             >
                               {/* 1. Indicador Visual de Macrotemas e Badge de Iniciais do Owner no Topo Absoluto */}
                               <div
