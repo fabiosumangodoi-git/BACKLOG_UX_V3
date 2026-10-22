@@ -113,8 +113,9 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
     window.OWNER_TO_SIGLA = OWNER_TO_SIGLA;
 
     function getOwnerSigla(owner) {
-      if (!owner) return "FG";
+      if (!owner) return "";
       const str = String(owner).trim();
+      if (!str) return "";
       if (OWNER_TO_SIGLA[str]) return OWNER_TO_SIGLA[str];
       const upper = str.toUpperCase();
       if (OWNER_TO_SIGLA[upper]) return OWNER_TO_SIGLA[upper];
@@ -122,7 +123,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
     }
 
     function getCardOwnerSiglas(item) {
-      if (!item) return ["FG"];
+      if (!item) return [];
       let rawList = [];
       if (Array.isArray(item.owners) && item.owners.length > 0) {
         rawList = item.owners;
@@ -131,17 +132,18 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
       } else if (typeof item.owners === "string" && item.owners.trim()) {
         rawList = [item.owners.trim()];
       } else {
-        rawList = ["FG"];
+        return [];
       }
 
       const siglas = [];
       for (const r of rawList) {
+        if (!r) continue;
         const s = getOwnerSigla(r);
         if (s && !siglas.includes(s)) {
           siglas.push(s);
         }
       }
-      return siglas.length > 0 ? siglas : ["FG"];
+      return siglas;
     }
 
     const { useState, useMemo, useRef, useEffect, Component } = React;
@@ -7225,7 +7227,9 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
       stream: "UP e DOWN",
       type: "História",
       status: "Backlog",
-      owners: ["FG"],
+      owner: "",
+      owners: [],
+      createdAt: "",
       brand: "Todas",
       journeys: ["Agendamento"],
       metrics: ["Conversão", "Experiência"],
@@ -7284,7 +7288,10 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
         card.piDown = downVal;
       }
 
-      if (!Array.isArray(card.owners)) card.owners = card.owners ? [card.owners] : ["FG"];
+      if (!Array.isArray(card.owners)) {
+        card.owners = card.owners ? [card.owners] : (card.owner ? [card.owner] : []);
+      }
+      card.owner = typeof card.owner === "string" ? card.owner : ((card.owners && card.owners[0]) || "");
       if (!Array.isArray(card.journeys)) card.journeys = card.journeys ? [card.journeys] : [];
       if (!Array.isArray(card.metrics)) card.metrics = card.metrics ? [card.metrics] : [];
       if (!Array.isArray(card.comments)) card.comments = Array.isArray(raw.comments) ? raw.comments : (Array.isArray(raw.history) ? raw.history : []);
@@ -7330,7 +7337,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
       return {
         id: String(card.id),
         data: { ...card, updatedAt: new Date().toISOString() },
-        position: Number(card.position) || 0,
+        position: Number.isFinite(Number(card.position)) ? Number(card.position) : 0,
         updated_at: new Date().toISOString()
       };
     }
@@ -7373,7 +7380,10 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
         card.piDown = downVal;
       }
 
-      if (!Array.isArray(card.owners)) card.owners = card.owners ? [card.owners] : ["FG"];
+      if (!Array.isArray(card.owners)) {
+        card.owners = card.owners ? [card.owners] : (card.owner ? [card.owner] : []);
+      }
+      card.owner = typeof card.owner === "string" ? card.owner : ((card.owners && card.owners[0]) || "");
       if (!Array.isArray(card.journeys)) card.journeys = card.journeys ? [card.journeys] : [];
       if (!Array.isArray(card.metrics)) card.metrics = card.metrics ? [card.metrics] : [];
       if (!Array.isArray(card.comments)) card.comments = Array.isArray(rowData.comments) ? rowData.comments : (Array.isArray(rowData.history) ? rowData.history : []);
@@ -7677,30 +7687,39 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                           )}
                         </div>
                         <div className="flex items-center gap-1 flex-shrink-0">
-                          {getCardOwnerSiglas(item).map(sigla => {
-                            const bStyle = OWNER_BADGE_STYLES[sigla] || OWNER_BADGE_STYLES["FG"];
-                            return (
-                              <span
-                                key={sigla}
-                                style={{
-                                  fontSize: "11px",
-                                  fontWeight: 700,
-                                  padding: "2px 7px",
-                                  borderRadius: "6px",
-                                  lineHeight: 1.2,
-                                  letterSpacing: "0.02em",
-                                  userSelect: "none",
-                                  pointerEvents: "none",
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  ...bStyle
-                                }}
-                              >
-                                {sigla}
-                              </span>
-                            );
-                          })}
+                          {getCardOwnerSiglas(item).length > 0 ? (
+                            getCardOwnerSiglas(item).map(sigla => {
+                              const bStyle = OWNER_BADGE_STYLES[sigla] || OWNER_BADGE_STYLES["FG"];
+                              return (
+                                <span
+                                  key={sigla}
+                                  style={{
+                                    fontSize: "11px",
+                                    fontWeight: 700,
+                                    padding: "2px 7px",
+                                    borderRadius: "6px",
+                                    lineHeight: 1.2,
+                                    letterSpacing: "0.02em",
+                                    userSelect: "none",
+                                    pointerEvents: "none",
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    ...bStyle
+                                  }}
+                                >
+                                  {sigla}
+                                </span>
+                              );
+                            })
+                          ) : (
+                            <span
+                              className="text-[10px] font-semibold text-slate-400 bg-slate-100 border border-slate-200/80 px-1.5 py-0.5 rounded"
+                              style={{ userSelect: "none", pointerEvents: "none", lineHeight: 1.2 }}
+                            >
+                              Sem owner
+                            </span>
+                          )}
                         </div>
                       </div>
 
@@ -8241,7 +8260,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
         setEditingCommentId(null);
       };
 
-      // Novo card state
+      // Novo card state (sem owner atribuído por padrão)
       const [newCard, setNewCard] = useState({
         jira: "AGDE-",
         jiraUrl: "",
@@ -8250,7 +8269,8 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
         stream: "UP e DOWN",
         type: "História",
         status: "Backlog",
-        owners: ["FG"],
+        owner: "",
+        owners: [],
         brand: "Todas",
         journeys: ["Agendamento"],
         metrics: ["Conversão", "Experiência"],
@@ -8349,7 +8369,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                 const newItem = fromSupabaseRow(row, itemsRef.current.length);
                 setItems(prev => {
                   if (prev.some(i => String(i.id) === String(newItem.id))) return prev;
-                  const next = [...prev, newItem];
+                  const next = [newItem, ...prev];
                   itemsRef.current = next;
                   writeLocal(next);
                   return next;
@@ -8544,7 +8564,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
           const { error } = await sb.from("initiatives").upsert({
             id: idStr,
             data: { ...cardToSave },
-            position: Number(cardToSave.position) || 0,
+            position: Number.isFinite(Number(cardToSave.position)) ? Number(cardToSave.position) : 0,
             updated_at: nowIso
           }, { onConflict: "id" });
 
@@ -8730,6 +8750,9 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
         const exists = list.includes(value);
         const updatedList = exists ? list.filter(v => v !== value) : [...list, value];
         const updatedCard = { ...current, [field]: updatedList };
+        if (field === "owners") {
+          updatedCard.owner = updatedList.length > 0 ? updatedList[0] : "";
+        }
         persistCardNow(updatedCard);
       };
 
@@ -8839,26 +8862,42 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
         };
       }, [filteredItems]);
 
-      // Criação de novo card
+      // Criação de novo card (sempre no topo da coluna e sem owner por padrão)
       const handleCreateCard = (e) => {
         e.preventDefault();
         if (!newCard.title.trim()) return;
 
-        const maxPos = items.reduce((max, i) => Math.max(max, typeof i.position === "number" ? i.position : 0), 0);
+        const nowIso = new Date().toISOString();
+        const minPos = items.reduce((min, i) => Math.min(min, typeof i.position === "number" ? i.position : 0), 0);
+        const targetCol = newCard.status || "Backlog";
+        const colMinPos = items
+          .filter(i => i.status === targetCol)
+          .reduce((min, i) => Math.min(min, typeof i.position === "number" ? i.position : 0), 0);
+        // Posição estritamente menor que qualquer card existente para garantir o topo absoluto da coluna
+        const newPos = Math.min(-Date.now(), minPos - 1, colMinPos - 1);
+
         const jiraNum = extractJiraNumber(newCard.jira) || extractJiraNumber(parseJiraCode(newCard.jiraUrl));
+        const chosenOwner = newCard.owner || (newCard.owners && newCard.owners[0]) || "";
+        const chosenOwners = Array.isArray(newCard.owners) && newCard.owners.length > 0
+          ? newCard.owners
+          : (chosenOwner ? [chosenOwner] : []);
+
         const created = normalizeItem({
           ...newCard,
           id: String(Date.now()),
           jira: jiraNum ? `AGDE-${jiraNum}` : (newCard.jira || "AGDE-"),
           jiraUrl: jiraNum ? buildJiraUrl(jiraNum) : (newCard.jiraUrl || ""),
-          position: maxPos + 1,
+          createdAt: nowIso,
+          position: newPos,
+          owner: chosenOwner,
+          owners: chosenOwners,
           comments: [{
             id: `aud-${Date.now()}`,
             text: `Criou a iniciativa`,
             createdAt: formatNow(),
             updatedAt: null,
             isSystem: true,
-            author: userName,
+            author: userName || "Sistema",
             auditKey: "",
             ts: Date.now()
           }]
@@ -8874,7 +8913,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
         setIsNewModalOpen(false);
         saveCardToSupabase(created);
 
-        // Reset
+        // Reset com owner em branco para futuras criações
         setNewCard({
           jira: "AGDE-",
           jiraUrl: "",
@@ -8883,7 +8922,8 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
           stream: "UP e DOWN",
           type: "História",
           status: "Backlog",
-          owners: ["FG"],
+          owner: "",
+          owners: [],
           brand: "Todas",
           journeys: ["Agendamento"],
           metrics: ["Conversão", "Experiência"],
@@ -9133,7 +9173,16 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                 className="flex gap-4 overflow-x-auto pb-4 custom-scrollbar"
               >
                 {STATUS_LIST.map(status => {
-                  const colItems = filteredItems.filter(i => i.status === status);
+                  const colItems = filteredItems
+                    .filter(i => i.status === status)
+                    .sort((a, b) => {
+                      const posA = Number.isFinite(Number(a.position)) ? Number(a.position) : 0;
+                      const posB = Number.isFinite(Number(b.position)) ? Number(b.position) : 0;
+                      if (posA !== posB) return posA - posB;
+                      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : (Number(a.id) || 0);
+                      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : (Number(b.id) || 0);
+                      return timeB - timeA;
+                    });
                   // Busca inteligente: quando houver busca digitada, oculta colunas com 0 cards
                   if (isSearching && colItems.length === 0) {
                     return null;
@@ -9206,30 +9255,39 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                                   )}
                                 </div>
                                 <div className="flex items-center gap-1 flex-shrink-0">
-                                  {getCardOwnerSiglas(item).map(sigla => {
-                                    const bStyle = OWNER_BADGE_STYLES[sigla] || OWNER_BADGE_STYLES["FG"];
-                                    return (
-                                      <span
-                                        key={sigla}
-                                        style={{
-                                          fontSize: "11px",
-                                          fontWeight: 700,
-                                          padding: "2px 7px",
-                                          borderRadius: "6px",
-                                          lineHeight: 1.2,
-                                          letterSpacing: "0.02em",
-                                          userSelect: "none",
-                                          pointerEvents: "none",
-                                          display: "inline-flex",
-                                          alignItems: "center",
-                                          justifyContent: "center",
-                                          ...bStyle
-                                        }}
-                                      >
-                                        {sigla}
-                                      </span>
-                                    );
-                                  })}
+                                  {getCardOwnerSiglas(item).length > 0 ? (
+                                    getCardOwnerSiglas(item).map(sigla => {
+                                      const bStyle = OWNER_BADGE_STYLES[sigla] || OWNER_BADGE_STYLES["FG"];
+                                      return (
+                                        <span
+                                          key={sigla}
+                                          style={{
+                                            fontSize: "11px",
+                                            fontWeight: 700,
+                                            padding: "2px 7px",
+                                            borderRadius: "6px",
+                                            lineHeight: 1.2,
+                                            letterSpacing: "0.02em",
+                                            userSelect: "none",
+                                            pointerEvents: "none",
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            ...bStyle
+                                          }}
+                                        >
+                                          {sigla}
+                                        </span>
+                                      );
+                                    })
+                                  ) : (
+                                    <span
+                                      className="text-[10px] font-semibold text-slate-400 bg-slate-100 border border-slate-200/80 px-1.5 py-0.5 rounded"
+                                      style={{ userSelect: "none", pointerEvents: "none", lineHeight: 1.2 }}
+                                    >
+                                      Sem owner
+                                    </span>
+                                  )}
                                 </div>
                               </div>
 
@@ -10265,6 +10323,32 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                         ))}
                       </select>
                     </div>
+                  </div>
+
+                  {/* Designer Responsável (Owner) */}
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-500 block mb-1">
+                      Designer Responsável (Owner)
+                    </label>
+                    <select
+                      value={newCard.owner || (newCard.owners && newCard.owners[0]) || ""}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setNewCard({
+                          ...newCard,
+                          owner: val,
+                          owners: val ? [val] : []
+                        });
+                      }}
+                      className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none focus:border-indigo-500 font-semibold"
+                    >
+                      <option value="">Selecione... (Sem Owner)</option>
+                      {OWNERS_ALL.map(o => (
+                        <option key={o} value={o}>
+                          {OWNER_NAMES[o] || o} ({o})
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
                   {/* Prazos & Sprints */}
