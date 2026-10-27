@@ -7844,6 +7844,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
         const vwoActive = items.filter(i => (i.status || "").startsWith("VWO"));
         const readyDev = items.filter(i => i.status === "Pronto pra dev");
         const blocked = items.filter(i => i.status === "Impedimento");
+        const backlog = items.filter(i => i.status === "Backlog");
 
         // Por Status
         const byStatus = STATUS_LIST.map(s => {
@@ -7851,8 +7852,8 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
           return { label: s, count, pct: Math.round((count / total) * 100), color: STATUS_BAR_HEX[s] };
         });
 
-        // Por PI (com divisão Concluído vs Em Andamento)
-        const byPI = PI_OPTIONS.map(pi => {
+        // Por PI (com divisão Concluído vs Em Andamento) - Apenas Program Increments reais (sem Backlog)
+        const byPI = PI_OPTIONS.filter(pi => pi !== "Backlog").map(pi => {
           const piItems = items.filter(i => i.pi === pi);
           const done = piItems.filter(i => i.status === "Concluído").length;
           return {
@@ -7904,6 +7905,8 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
 
         return {
           total: items.length,
+          backlogCount: backlog.length,
+          backlogRate: items.length ? Math.round((backlog.length / items.length) * 100) : 0,
           completedCount: completed.length,
           completionRate: items.length ? Math.round((completed.length / items.length) * 100) : 0,
           inProdCount: inProd.length,
@@ -7939,11 +7942,20 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
       return (
         <div className="space-y-6 pb-10">
           {/* KPIs EXECUTIVOS NO TOPO */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-4">
             <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Total Mapeado</span>
               <span className="text-2xl font-bold text-slate-900 mt-1 block">{analytics.total}</span>
               <span className="text-[11px] text-slate-500">100% do backlog ativo</span>
+            </div>
+
+            <div className="bg-white p-4 rounded-2xl border border-slate-300 shadow-sm" style={{ borderColor: '#CBD5E1' }}>
+              <span className="text-[11px] font-bold uppercase tracking-wider block" style={{ color: '#475569' }}>Backlog</span>
+              <div className="flex items-baseline gap-2 mt-1">
+                <span className="text-2xl font-bold text-slate-800">{analytics.backlogCount}</span>
+                <span className="text-xs font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">{analytics.backlogRate}%</span>
+              </div>
+              <span className="text-[11px] text-slate-500">Aguardando priorização / refino</span>
             </div>
 
             <div className="bg-white p-4 rounded-2xl border border-teal-200 shadow-sm">
