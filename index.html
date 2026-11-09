@@ -166,6 +166,25 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
       "Despriorizado"
     ];
 
+    // V3.1: etapas finais saem do fluxo principal e viram abas próprias
+    const APP_VERSION = "v3.1";
+    const FLOW_EXIT_STATUSES = ["Concluído", "Despriorizado"];
+    // V3.1: campos da aba "Produção & Resultado" que ainda faltam num card concluído
+    const getDoneMissing = (item) => {
+      if (!item || item.status !== "Concluído") return [];
+      const miss = [];
+      if (!(item.productionDate || item.dataProducao)) miss.push("Data em Produção");
+      if (!String(item.problemSolved || "").trim()) miss.push("Resumo executivo");
+      if (!String(item.whatToMeasure || "").trim()) miss.push("Hipótese / o que medir");
+      if (!String(item.achievedResult || "").trim()) miss.push("Resultado alcançado");
+      return miss;
+    };
+    const TAB_STATUSES = {
+      Fluxo: STATUS_LIST.filter(s => !FLOW_EXIT_STATUSES.includes(s)),
+      "Concluídos": ["Concluído"],
+      Despriorizados: ["Despriorizado"],
+    };
+
     const PI_OPTIONS = ["Backlog", "PI1", "PI2", "PI3", "PI4"];
     const PI_CYCLE_OPTIONS = ["PI1", "PI2", "PI3", "PI4"];
     const BRAND_OPTIONS = ["Fleury", "Amais", "Labs", "Todas"];
@@ -7836,7 +7855,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
     // ==========================================
     // COMPONENTE: DASHBOARD DE INDICADORES E GRÁFICOS
     // ==========================================
-    function DashboardView({ items, onOpenItem }) {
+    function DashboardView({ items, onOpenItem, onGoToStatus }) {
       const analytics = useMemo(() => {
         const total = items.length || 1;
         const completed = items.filter(i => isDoneStatus(i.status));
@@ -7853,17 +7872,31 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
         });
 
         // Por PI (com divisão Concluído vs Em Andamento) - Apenas Program Increments reais (sem Backlog)
-        const byPI = PI_OPTIONS.filter(pi => pi !== "Backlog").map(pi => {
-          const piItems = items.filter(i => i.pi === pi);
-          const done = piItems.filter(i => i.status === "Concluído").length;
-          return {
-            pi,
-            total: piItems.length,
-            done,
-            open: piItems.length - done,
-            pctDone: piItems.length ? Math.round((done / piItems.length) * 100) : 0,
-            color: PI_HEX[pi]
-          };
+        // V3.1: PIs separados por ano. Concluído com Data em Produção usa o ano da data;
+        // sem data (em andamento, backlog ou concluído sem data) conta no ano atual.
+        const currentYear = new Date().getFullYear();
+        const yearOf = (i) => {
+          const m = /^(\d{4})-\d{2}-\d{2}$/.exec(i.productionDate || i.dataProducao || "");
+          return m && i.status === "Concluído" ? Number(m[1]) : currentYear;
+        };
+        const piItemsAll = items.filter(i => PI_CYCLE_OPTIONS.includes(i.pi));
+        const yearsSet = Array.from(new Set(piItemsAll.map(yearOf))).sort((x, y) => y - x);
+        const byPIYear = yearsSet.map(year => {
+          const yItems = piItemsAll.filter(i => yearOf(i) === year);
+          const rows = PI_CYCLE_OPTIONS.map(pi => {
+            const piItems = yItems.filter(i => i.pi === pi);
+            const done = piItems.filter(i => i.status === "Concluído").length;
+            return {
+              pi,
+              total: piItems.length,
+              done,
+              open: piItems.length - done,
+              pctDone: piItems.length ? Math.round((done / piItems.length) * 100) : 0
+            };
+          }).filter(r => r.total > 0);
+          const total = yItems.length;
+          const done = yItems.filter(i => i.status === "Concluído").length;
+          return { year, isCurrent: year === currentYear, rows, total, done, open: total - done };
         });
 
         // Por Tipo de Atuação (Stream)
@@ -7903,7 +7936,30 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
           return { owner: o, count: ownerItems.length, done };
         }).sort((a, b) => b.count - a.count);
 
+        // V3.1: entregas por mês (cards concluídos com Data em Produção válida)
+        const MESES = ["jan","fev","mar","abr","mai","jun","jul","ago","set","out","nov","dez"];
+        const doneDated = items
+          .map(i => /^(\d{4})-(\d{2})-\d{2}$/.exec(i.productionDate || i.dataProducao || ""))
+          .filter(Boolean)
+          .map(m => ({ y: Number(m[1]), m: Number(m[2]) - 1 }));
+        const monthCount = {};
+        doneDated.forEach(d => { const k = d.y * 12 + d.m; monthCount[k] = (monthCount[k] || 0) + 1; });
+        const keys = Object.keys(monthCount).map(Number);
+        let byMonth = [];
+        if (keys.length) {
+          const first = Math.max(Math.min(...keys), Math.max(...keys) - 17);
+          for (let k = first; k <= Math.max(...keys); k++) {
+            byMonth.push({ key: k, label: `${MESES[k % 12]}/${String(Math.floor(k / 12)).slice(2)}`, count: monthCount[k] || 0 });
+          }
+        }
+        const monthTotal = byMonth.reduce((a, b) => a + b.count, 0);
+        const doneWithoutDate = completed.filter(i => !/^\d{4}-\d{2}-\d{2}$/.test(i.productionDate || i.dataProducao || "")).length;
+
         return {
+          byMonth,
+          monthTotal,
+          monthAvg: byMonth.length ? Math.round((monthTotal / byMonth.length) * 10) / 10 : 0,
+          doneWithoutDate,
           total: items.length,
           backlogCount: backlog.length,
           backlogRate: items.length ? Math.round((backlog.length / items.length) * 100) : 0,
@@ -7914,7 +7970,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
           readyDevCount: readyDev.length,
           blockedCount: blocked.length,
           byStatus,
-          byPI,
+          byPIYear,
           byStream,
           byType,
           byBrand,
@@ -7936,6 +7992,10 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
         return { ...seg, strokeDasharray, strokeDashoffset, color: typeColors[seg.label] || "#64748B" };
       });
 
+      // V3.1: aba de ano do gráfico de PI (padrão: ano atual)
+      const [piYear, setPiYear] = useState(null);
+      const piYearActive = analytics.byPIYear.some(y => y.year === piYear) ? piYear : (analytics.byPIYear.find(y => y.isCurrent) || analytics.byPIYear[0] || {}).year;
+
       const maxStatusCount = Math.max(...analytics.byStatus.map(s => s.count), 1);
       const maxJourneyCount = Math.max(...analytics.byJourney.map(j => j.count), 1);
 
@@ -7949,7 +8009,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
               <span className="text-[11px] text-slate-500">100% do backlog ativo</span>
             </div>
 
-            <div className="bg-white p-4 rounded-2xl border border-slate-300 shadow-sm" style={{ borderColor: '#CBD5E1' }}>
+            <div onClick={() => onGoToStatus && onGoToStatus("Backlog")} title="Ver estes cards" className="bg-white p-4 rounded-2xl border border-slate-300 shadow-sm cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition" style={{ borderColor: '#CBD5E1' }}>
               <span className="text-[11px] font-bold uppercase tracking-wider block" style={{ color: '#475569' }}>Backlog</span>
               <div className="flex items-baseline gap-2 mt-1">
                 <span className="text-2xl font-bold text-slate-800">{analytics.backlogCount}</span>
@@ -7958,7 +8018,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
               <span className="text-[11px] text-slate-500">Aguardando priorização / refino</span>
             </div>
 
-            <div className="bg-white p-4 rounded-2xl border border-teal-200 shadow-sm">
+            <div onClick={() => onGoToStatus && onGoToStatus("Concluído")} title="Ver estes cards" className="bg-white p-4 rounded-2xl border border-teal-200 shadow-sm cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition">
               <span className="text-[11px] font-bold uppercase tracking-wider text-teal-600 block">Concluídos</span>
               <div className="flex items-baseline gap-2 mt-1">
                 <span className="text-2xl font-bold text-teal-700">{analytics.completedCount}</span>
@@ -7967,29 +8027,74 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
               <span className="text-[11px] text-slate-500">Taxa de entrega total</span>
             </div>
 
-            <div className="bg-white p-4 rounded-2xl border border-indigo-200 shadow-sm">
+            <div onClick={() => onGoToStatus && onGoToStatus("Concluído")} title="Ver estes cards" className="bg-white p-4 rounded-2xl border border-indigo-200 shadow-sm cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition">
               <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-600 block">Em Produção</span>
               <span className="text-2xl font-bold text-indigo-700 mt-1 block">{analytics.inProdCount}</span>
               <span className="text-[11px] text-slate-500">Com data de deploy</span>
             </div>
 
-            <div className="bg-white p-4 rounded-2xl border border-blue-200 shadow-sm">
+            <div onClick={() => onGoToStatus && onGoToStatus("Pronto pra dev")} title="Ver estes cards" className="bg-white p-4 rounded-2xl border border-blue-200 shadow-sm cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition">
               <span className="text-[11px] font-bold uppercase tracking-wider text-blue-600 block">Pronto p/ DEV</span>
               <span className="text-2xl font-bold text-blue-700 mt-1 block">{analytics.readyDevCount}</span>
               <span className="text-[11px] text-slate-500">Aguardando puxada tech</span>
             </div>
 
-            <div className="bg-white p-4 rounded-2xl border border-emerald-200 shadow-sm">
+            <div onClick={() => onGoToStatus && onGoToStatus("VWO config")} title="Ver estes cards" className="bg-white p-4 rounded-2xl border border-emerald-200 shadow-sm cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition">
               <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-600 block">Testes A/B (VWO)</span>
               <span className="text-2xl font-bold text-emerald-700 mt-1 block">{analytics.vwoCount}</span>
               <span className="text-[11px] text-slate-500">Configurando ou no ar</span>
             </div>
 
-            <div className="bg-white p-4 rounded-2xl border border-rose-200 shadow-sm">
+            <div onClick={() => onGoToStatus && onGoToStatus("Impedimento")} title="Ver estes cards" className="bg-white p-4 rounded-2xl border border-rose-200 shadow-sm cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition">
               <span className="text-[11px] font-bold uppercase tracking-wider text-rose-600 block">Impedimentos</span>
               <span className="text-2xl font-bold text-rose-700 mt-1 block">{analytics.blockedCount}</span>
               <span className="text-[11px] text-slate-500">Dependências críticas</span>
             </div>
+          </div>
+
+          {/* V3.1: ENTREGAS POR MÊS (ritmo de produção) */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-2 mb-4">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Subidas em produção por mês</h3>
+                <p className="text-xs text-slate-500">
+                  {analytics.monthTotal} iniciativas subiram em produção • média de {String(analytics.monthAvg).replace(".", ",")} por mês
+                </p>
+              </div>
+              {analytics.doneWithoutDate > 0 && (
+                <span
+                  onClick={() => onGoToStatus && onGoToStatus("Concluído")}
+                  className="text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-300 rounded-lg px-2.5 py-1 cursor-pointer hover:bg-amber-100"
+                  title="Abrir a aba Concluídos"
+                >
+                  {analytics.doneWithoutDate} concluídos sem Data em Produção não entram no gráfico
+                </span>
+              )}
+            </div>
+            {analytics.byMonth.length === 0 ? (
+              <p className="text-xs text-slate-400 py-8 text-center">Nenhum card com Data em Produção preenchida.</p>
+            ) : (() => {
+              const maxM = Math.max(...analytics.byMonth.map(m => m.count), 1);
+              return (
+                <div className="flex items-end gap-2" style={{ height: 150 }}>
+                  {analytics.byMonth.map(m => (
+                    <div
+                      key={m.key}
+                      onClick={() => onGoToStatus && onGoToStatus("Concluído")}
+                      title={`${m.label}: ${m.count} subida(s) em produção`}
+                      className="flex-1 min-w-0 h-full flex flex-col items-center justify-end gap-1 cursor-pointer group"
+                    >
+                      <span className="text-[11px] font-bold text-slate-700">{m.count || ""}</span>
+                      <div
+                        className="w-full rounded-t-md bg-teal-500 group-hover:bg-teal-600 transition"
+                        style={{ height: `${Math.max((m.count / maxM) * 100, m.count ? 4 : 1)}px`, minHeight: m.count ? 4 : 1, opacity: m.count ? 1 : 0.25 }}
+                      />
+                      <span className="text-[10px] font-medium text-slate-500">{m.label}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
           </div>
 
           {/* LINHA 1 DE GRÁFICOS: DISTRIBUIÇÃO POR COLUNA (STATUS) & EVOLUÇÃO POR PI */}
@@ -8006,7 +8111,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
 
                 <div className="space-y-3">
                   {analytics.byStatus.map(st => (
-                    <div key={st.label} className="space-y-1">
+                    <div key={st.label} onClick={() => onGoToStatus && onGoToStatus(st.label)} title="Ver cards desta etapa" className="space-y-1 cursor-pointer rounded-lg px-1 -mx-1 hover:bg-slate-50 transition">
                       <div className="flex items-center justify-between text-xs">
                         <span className="font-semibold text-slate-700">{st.label}</span>
                         <span className="font-bold text-slate-900">
@@ -8035,34 +8140,60 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                 <p className="text-xs text-slate-500 mb-4">Comparativo de iniciativas planejadas vs. concluídas em cada PI</p>
 
                 <div className="space-y-4">
-                  {analytics.byPI.map(p => (
-                    <div key={p.pi} className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <span className={`text-xs font-bold px-2.5 py-0.5 rounded border ${PI_COLORS[p.pi]}`}>
-                            {p.pi}
-                          </span>
-                          <span className="text-xs font-semibold text-slate-700">
-                            {p.total} {p.total === 1 ? "iniciativa" : "iniciativas"}
-                          </span>
-                        </div>
-                        <span className="text-xs font-bold text-teal-700">
-                          {p.done} concluídas ({p.pctDone}%)
+                  <div className="inline-flex items-center bg-slate-100 p-1 rounded-lg border border-slate-200/80">
+                    {analytics.byPIYear.map(y => (
+                      <button
+                        key={y.year}
+                        onClick={() => setPiYear(y.year)}
+                        className={`px-4 py-1.5 rounded-md text-xs font-bold transition ${
+                          piYearActive === y.year ? "bg-white text-indigo-600 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                        }`}
+                      >
+                        {y.year}{y.isCurrent ? " (atual)" : ""}
+                      </button>
+                    ))}
+                  </div>
+                  {analytics.byPIYear.filter(y => y.year === piYearActive).map(y => (
+                    <div key={y.year} className="space-y-3">
+                      <div className="flex items-center justify-between border-b border-slate-200 pb-1.5">
+                        <span className="text-sm font-bold text-slate-900">Resumo de {y.year}</span>
+                        <span className="text-xs text-slate-500">
+                          <strong className="text-slate-800">{y.total}</strong> iniciativas • <strong className="text-teal-700">{y.done}</strong> concluídas{y.open > 0 && <> • <strong className="text-slate-800">{y.open}</strong> em aberto</>}
                         </span>
                       </div>
-                      <div className="w-full h-3 bg-slate-200 rounded-full overflow-hidden flex">
-                        <div
-                          style={{ width: `${p.pctDone}%` }}
-                          className="bg-teal-500 h-full transition-all duration-500"
-                          title={`Concluídos: ${p.done}`}
-                        />
-                      </div>
-                      <div className="flex justify-between text-[11px] text-slate-500 mt-1.5">
-                        <span>Concluídos: <strong>{p.done}</strong></span>
-                        <span>Em andamento / backlog: <strong>{p.open}</strong></span>
-                      </div>
+                      {y.rows.map(p => (
+                        <div key={y.year + p.pi} className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <span className={`text-xs font-bold px-2.5 py-0.5 rounded border ${PI_COLORS[p.pi]}`}>
+                                {p.pi} · {y.year}
+                              </span>
+                              <span className="text-xs font-semibold text-slate-700">
+                                {p.total} {p.total === 1 ? "iniciativa" : "iniciativas"}
+                              </span>
+                            </div>
+                            <span className="text-xs font-bold text-teal-700">
+                              {p.done} concluídas ({p.pctDone}%)
+                            </span>
+                          </div>
+                          <div className="w-full h-3 bg-slate-200 rounded-full overflow-hidden flex">
+                            <div
+                              style={{ width: `${p.pctDone}%` }}
+                              className="bg-teal-500 h-full transition-all duration-500"
+                              title={`Concluídos: ${p.done}`}
+                            />
+                          </div>
+                          <div className="flex justify-between text-[11px] text-slate-500 mt-1.5">
+                            <span>Concluídos: <strong>{p.done}</strong></span>
+                            <span>Em andamento / backlog: <strong>{p.open}</strong></span>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   ))}
+                  <p className="text-[11px] text-slate-400">
+                    Concluídos entram no ano da Data em Produção. Cards em andamento ou sem data contam no ano atual.
+                  </p>
                 </div>
               </div>
             </div>
@@ -8138,7 +8269,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                 <p className="text-xs text-slate-500 mb-4">Quantos cards alavancam cada indicador-chave</p>
 
                 <div className="space-y-3">
-                  {analytics.byMetric.map(m => (
+                  {analytics.byMetric.filter(m => m.pct < 90).map(m => (
                     <div key={m.label} className="space-y-1">
                       <div className="flex justify-between text-xs">
                         <span className="font-semibold text-slate-700">{m.label}</span>
@@ -8152,19 +8283,11 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-slate-100">
-                <span className="text-[11px] font-bold uppercase text-slate-400 block mb-2.5">Distribuição por Marca</span>
-                <div className="grid grid-cols-2 gap-2">
-                  {analytics.byBrand.map(b => (
-                    <div key={b.label} className="bg-slate-50 border border-slate-200/80 rounded-xl p-2.5 flex items-center justify-between">
-                      <span className="text-xs font-semibold text-slate-700">{b.label}</span>
-                      <span className="text-xs font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
-                        {b.count}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              {analytics.byMetric.some(m => m.pct >= 90) && (
+                <p className="pt-3 border-t border-slate-100 text-[11px] text-slate-400">
+                  Omitido por estar em quase todos os cards: {analytics.byMetric.filter(m => m.pct >= 90).map(m => `${m.label} (${m.pct}%)`).join(", ")}.
+                </p>
+              )}
             </div>
 
             {/* Jornadas Impactadas & Alocação por Owner */}
@@ -8206,8 +8329,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
             </div>
           </div>
 
-          {/* REPOSITÓRIO DE RESULTADOS & INICIATIVAS CONCLUÍDAS (busca, ordenação, filtro e paginação) */}
-          <ResultsRepository completedItems={analytics.completedItems} onOpenItem={onOpenItem} />
+          {/* V3.1: o repositório de concluídos agora vive na aba "Concluídos" */}
         </div>
       );
     }
@@ -8219,7 +8341,9 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
       const userName = currentUser || "Sistema";
       const [items, setItems] = useState(sb ? [] : loadLocal);
       const [syncState, setSyncState] = useState(sb ? "connecting" : "local");
-      const [activeTab, setActiveTab] = useState("Todos"); // 'Todos' | 'Dashboard'
+      const [activeTab, setActiveTab] = useState("Fluxo"); // 'Fluxo' | 'Concluídos' | 'Despriorizados' | 'Dashboard'
+      const visibleStatuses = TAB_STATUSES[activeTab] || [];
+      const singleColumn = visibleStatuses.length === 1;
       const [searchQuery, setSearchQuery] = useState("");
       const [selectedOwner, setSelectedOwner] = useState("Todos");
       const [selectedStream, setSelectedStream] = useState("Todas");
@@ -8243,6 +8367,27 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
       // Modal de novo card e confirmação de exclusão
       const [isNewModalOpen, setIsNewModalOpen] = useState(false);
       const [itemToDelete, setItemToDelete] = useState(null);
+      const filtersActive = Boolean(searchQuery.trim()) || selectedOwner !== "Todos" || selectedStream !== "Todas" || selectedPIFilter !== "Todos" || selectedTypeFilter !== "Todas";
+      // V3.1: clique nos indicadores do Dashboard leva à aba certa e destaca a coluna
+      const goToStatus = (status) => {
+        const tab = status === "Concluído" ? "Concluídos" : status === "Despriorizado" ? "Despriorizados" : "Fluxo";
+        clearFilters();
+        setActiveTab(tab);
+        window.scrollTo({ top: 0 });
+        if (tab === "Fluxo") {
+          setTimeout(() => {
+            const el = document.querySelector(`[data-status="${status}"]`);
+            if (!el) return;
+            el.scrollIntoView({ behavior: "smooth", inline: "start", block: "nearest" });
+            el.classList.add("ring-4", "ring-indigo-400");
+            setTimeout(() => el.classList.remove("ring-4", "ring-indigo-400"), 2000);
+          }, 150);
+        }
+      };
+      const clearFilters = () => {
+        setSearchQuery(""); setSelectedOwner("Todos"); setSelectedStream("Todas");
+        setSelectedPIFilter("Todos"); setSelectedTypeFilter("Todas");
+      };
 
       const timers = useRef({});
       // Controle de eco do Realtime: carimbos (ms) de updated_at já enviados por este cliente
@@ -8864,6 +9009,8 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
         });
       }, [items, searchQuery, selectedOwner, selectedStream, selectedPIFilter, selectedTypeFilter]);
 
+      const noResults = filtersActive && !visibleStatuses.some(st => filteredItems.some(i => i.status === st));
+
       const stats = useMemo(() => {
         return {
           total: filteredItems.length,
@@ -8960,6 +9107,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                 <div>
                   <div className="flex items-center gap-2">
                     <h1 className="text-lg font-bold text-slate-900">UX Ops & Backlog Hub</h1>
+                    <span title="Versão 3.1" className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">{APP_VERSION}</span>
                     <span className="text-xs font-medium px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 inline-flex items-center gap-1">
                       <MIcon name={SYNC_ICON[syncState] || "cloud_done"} className="text-[14px]" />
                       <span>{SYNC_LABEL[syncState]}</span>
@@ -8971,62 +9119,8 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                 </div>
               </div>
 
-              {/* NAVEGAÇÃO PRINCIPAL: APENAS "TODOS" E "DASHBOARD" */}
-              <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200/80">
-                <button
-                  onClick={() => setActiveTab("Todos")}
-                  className={`px-5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2 ${
-                    activeTab === "Todos"
-                      ? "bg-white text-indigo-600 shadow-sm"
-                      : "text-slate-600 hover:text-slate-900"
-                  }`}
-                >
-                  <MIcon name="view_kanban" className="text-[16px]" />
-                  <span>Todos</span>
-                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${
-                    activeTab === "Todos" ? "bg-indigo-100 text-indigo-700" : "bg-slate-200 text-slate-600"
-                  }`}>
-                    {items.length}
-                  </span>
-                </button>
-
-                <button
-                  onClick={() => setActiveTab("Dashboard")}
-                  className={`px-5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2 ${
-                    activeTab === "Dashboard"
-                      ? "bg-white text-indigo-600 shadow-sm"
-                      : "text-slate-600 hover:text-slate-900"
-                  }`}
-                >
-                  <MIcon name="analytics" className="text-[16px]" />
-                  <span>Dashboard</span>
-                </button>
-              </div>
-
-              {/* KPIs Rápidos & Botão Nova Iniciativa */}
+              {/* Botões de ação: Nova Iniciativa, usuário logado e sair */}
               <div className="flex items-center gap-3">
-                <div className="hidden 2xl:flex items-center gap-4 bg-slate-50 px-3.5 py-1.5 rounded-xl border border-slate-200/80 text-xs">
-                  <div>
-                    <span className="text-[10px] uppercase text-blue-600 font-bold block">Pronto DEV</span>
-                    <span className="font-bold text-slate-800">{stats.readyForDev}</span>
-                  </div>
-                  <div className="h-5 w-px bg-slate-200"></div>
-                  <div>
-                    <span className="text-[10px] uppercase text-emerald-600 font-bold block">VWO</span>
-                    <span className="font-bold text-slate-800">{stats.vwoLive}</span>
-                  </div>
-                  <div className="h-5 w-px bg-slate-200"></div>
-                  <div>
-                    <span className="text-[10px] uppercase text-rose-600 font-bold block">Impedimentos</span>
-                    <span className="font-bold text-slate-800">{stats.blocked}</span>
-                  </div>
-                  <div className="h-5 w-px bg-slate-200"></div>
-                  <div>
-                    <span className="text-[10px] uppercase text-teal-600 font-bold block">Concluídos</span>
-                    <span className="font-bold text-slate-800">{stats.completed}</span>
-                  </div>
-                </div>
-
                 <button
                   onClick={() => setIsNewModalOpen(true)}
                   className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-sm transition flex items-center gap-1.5"
@@ -9050,11 +9144,69 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                   </button>
                 )}
               </div>
+
+              {/* Indicadores rápidos + navegação por abas */}
+              <div className="flex items-center gap-4">
+                <div className="hidden 2xl:flex items-center gap-4 bg-slate-50 px-3.5 py-1.5 rounded-xl border border-slate-200/80 text-xs">
+                  <div>
+                    <span className="text-[10px] uppercase text-blue-600 font-bold block">Pronto DEV</span>
+                    <span className="font-bold text-slate-800">{stats.readyForDev}</span>
+                  </div>
+                  <div className="h-5 w-px bg-slate-200"></div>
+                  <div>
+                    <span className="text-[10px] uppercase text-emerald-600 font-bold block">VWO</span>
+                    <span className="font-bold text-slate-800">{stats.vwoLive}</span>
+                  </div>
+                  <div className="h-5 w-px bg-slate-200"></div>
+                  <div>
+                    <span className="text-[10px] uppercase text-rose-600 font-bold block">Impedimentos</span>
+                    <span className="font-bold text-slate-800">{stats.blocked}</span>
+                  </div>
+                  <div className="h-5 w-px bg-slate-200"></div>
+                  <div>
+                    <span className="text-[10px] uppercase text-teal-600 font-bold block">Concluídos</span>
+                    <span className="font-bold text-slate-800">{stats.completed}</span>
+                  </div>
+                </div>
+
+                {/* NAVEGAÇÃO PRINCIPAL: FLUXO, CONCLUÍDOS, DESPRIORIZADOS E DASHBOARD */}
+              <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200/80">
+                {[
+                  { id: "Fluxo", icon: "view_kanban" },
+                  { id: "Concluídos", icon: "task_alt" },
+                  { id: "Despriorizados", icon: "archive" },
+                  { id: "Dashboard", icon: "analytics" },
+                ].map(t => {
+                  const count = t.id === "Dashboard" ? null : (filtersActive && t.id !== "Concluídos" ? filteredItems : items).filter(i => (TAB_STATUSES[t.id] || []).includes(i.status)).length;
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => setActiveTab(t.id)}
+                      className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2 ${
+                        activeTab === t.id
+                          ? "bg-white text-indigo-600 shadow-sm"
+                          : "text-slate-600 hover:text-slate-900"
+                      }`}
+                    >
+                      <MIcon name={t.icon} className="text-[16px]" />
+                      <span>{t.id}</span>
+                      {count !== null && (
+                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${
+                          filtersActive && t.id !== "Concluídos" ? "bg-amber-100 text-amber-800" : (activeTab === t.id ? "bg-indigo-100 text-indigo-700" : "bg-slate-200 text-slate-600")
+                        }`} title={filtersActive && t.id !== "Concluídos" ? "Contagem com filtros ativos" : undefined}>
+                          {count}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+              </div>
             </div>
           </header>
 
           {/* BARRA DE FILTROS (EXIBIDA NA ABA "TODOS") */}
-          {activeTab === "Todos" && (
+          {(activeTab === "Fluxo" || activeTab === "Despriorizados") && (
             <section className="bg-white/70 backdrop-blur border-b border-slate-200/80">
               <div className="max-w-[1600px] mx-auto px-6 py-2.5 flex flex-wrap items-center justify-between gap-4">
                 {/* Busca */}
@@ -9163,6 +9315,16 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                       </button>
                     ))}
                   </div>
+
+                  {filtersActive && (
+                    <button
+                      onClick={clearFilters}
+                      className="ml-2 px-2.5 py-1 rounded-md text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300 hover:bg-amber-100 transition flex items-center gap-1"
+                    >
+                      <MIcon name="filter_alt_off" className="text-[14px]" />
+                      <span>Limpar filtros</span>
+                    </button>
+                  )}
                 </div>
               </div>
             </section>
@@ -9170,9 +9332,18 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
 
           {/* CONTEÚDO PRINCIPAL */}
           <main className="flex-1 max-w-[1600px] w-full mx-auto px-6 py-5">
-            {activeTab === "Dashboard" ? (
+            {activeTab === "Concluídos" ? (
+              <ResultsRepository
+                completedItems={items.filter(i => isDoneStatus(i.status))}
+                onOpenItem={(item, tab = "resultados") => {
+                  setSelectedItem(item);
+                  setDrawerTab(tab);
+                }}
+              />
+            ) : activeTab === "Dashboard" ? (
               <DashboardView
                 items={items}
+                onGoToStatus={goToStatus}
                 onOpenItem={(item, tab = "escopo") => {
                   setSelectedItem(item);
                   setDrawerTab(tab);
@@ -9184,7 +9355,22 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                 ref={kanbanScrollRef}
                 className="flex gap-4 overflow-x-auto pb-4 custom-scrollbar"
               >
-                {STATUS_LIST.map(status => {
+                {noResults && (
+                  <div className="w-full flex flex-col items-center justify-center text-center gap-3 py-20 bg-white border border-dashed border-slate-300 rounded-2xl">
+                    <MIcon name="search_off" className="text-[32px] text-slate-400" />
+                    <p className="text-sm font-bold text-slate-700">Nenhum card encontrado nesta aba com os filtros atuais</p>
+                    <p className="text-xs text-slate-500">
+                      {filteredItems.length > 0 ? "Os resultados estão em outra aba (veja os números destacados)." : "Tente outro termo ou remova algum filtro."}
+                    </p>
+                    <button
+                      onClick={clearFilters}
+                      className="px-4 py-2 rounded-lg text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 transition"
+                    >
+                      Limpar filtros
+                    </button>
+                  </div>
+                )}
+                {!noResults && visibleStatuses.map(status => {
                   const colItems = filteredItems
                     .filter(i => i.status === status)
                     .sort((a, b) => {
@@ -9203,9 +9389,10 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                   return (
                     <div
                       key={status}
+                      data-status={status}
                       onDragOver={e => handleDragOverColumn(e, status)}
                       onDrop={e => handleDropOnColumn(e, status)}
-                      className={`w-72 flex-shrink-0 flex flex-col rounded-2xl border transition-all duration-200 ${
+                      className={`${singleColumn ? "w-full" : "w-72 flex-shrink-0"} flex flex-col rounded-2xl border transition-all duration-200 ${
                         dragOverStatus === status
                           ? "bg-indigo-50/80 border-indigo-400 ring-2 ring-indigo-400/30"
                           : "bg-slate-100/70 border-slate-200/80"
@@ -9223,9 +9410,9 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                       </div>
 
                       {/* Lista de Cards da Coluna */}
-                      <div className="p-2 space-y-2.5 overflow-y-auto flex-1 custom-scrollbar">
+                      <div className={`p-2 overflow-y-auto flex-1 custom-scrollbar ${singleColumn ? "grid grid-cols-2 xl:grid-cols-4 gap-2.5 auto-rows-max content-start" : "space-y-2.5"}`}>
                         {colItems.length === 0 ? (
-                          <div className="text-center py-8 text-xs text-slate-400 border border-dashed border-slate-200 rounded-xl">
+                          <div className="col-span-full text-center py-8 text-xs text-slate-400 border border-dashed border-slate-200 rounded-xl">
                             Nenhum item nesta etapa
                           </div>
                         ) : (
@@ -9352,6 +9539,21 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                                 {item.description}
                               </p>
 
+                              {/* V3.1: data de produção/conclusão visível nos cards concluídos */}
+                              {item.status === "Concluído" && (() => {
+                                const raw = item.productionDate || item.dataProducao || "";
+                                const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+                                return (
+                                  <div
+                                    className={`flex items-center gap-1.5 mb-2 text-[12px] font-semibold ${m ? "text-emerald-700" : "text-slate-400 font-medium"}`}
+                                    title="Data em Produção (preenchida no card)"
+                                  >
+                                    <MIcon name="event_available" className="text-[15px]" />
+                                    <span>{m ? `Em produção: ${m[3]}/${m[2]}/${m[1]}` : "Sem data de produção"}</span>
+                                  </div>
+                                );
+                              })()}
+
                               {/* 6. Rodapé do Card: Classificação e Marca (100% Read-Only, sem botões ou selects) */}
                               <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
                                 <span
@@ -9373,6 +9575,23 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                     </div>
                   );
                 })}
+
+                {/* V3.1: zonas de soltar para as etapas finais, visíveis só durante o arrasto */}
+                {activeTab === "Fluxo" && draggedItemId && FLOW_EXIT_STATUSES.map(status => (
+                  <div
+                    key={status}
+                    onDragOver={e => handleDragOverColumn(e, status)}
+                    onDrop={e => handleDropOnColumn(e, status)}
+                    className={`w-44 flex-shrink-0 flex items-center justify-center text-center text-xs font-bold uppercase tracking-wide rounded-2xl border-2 border-dashed transition-all ${
+                      dragOverStatus === status
+                        ? "bg-indigo-50 border-indigo-400 text-indigo-700"
+                        : "bg-white/60 border-slate-300 text-slate-500"
+                    }`}
+                    style={{ minHeight: 160 }}
+                  >
+                    Soltar aqui para {status}
+                  </div>
+                ))}
               </div>
             )}
           </main>
@@ -9652,6 +9871,14 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                     >
                       <MIcon name="trending_up" className="text-[15px]" />
                       <span>Produção & Resultado</span>
+                      {getDoneMissing(selectedItem).length > 0 && (
+                        <span
+                          title={`Falta preencher: ${getDoneMissing(selectedItem).join(", ")}`}
+                          className="w-4 h-4 rounded-full bg-amber-500 text-white text-[10px] font-bold flex items-center justify-center"
+                        >
+                          {getDoneMissing(selectedItem).length}
+                        </span>
+                      )}
                     </button>
                   </div>
                 </div>
@@ -9984,6 +10211,14 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                     const isCardDone = isDoneStatus(selectedItem.status);
                     return (
                       <div className="space-y-4">
+                        {isCardDone && getDoneMissing(selectedItem).length > 0 && (
+                          <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl text-amber-900 text-xs flex items-start gap-2">
+                            <MIcon name="edit_note" className="text-[18px] text-amber-700 flex-shrink-0" />
+                            <span className="font-medium">
+                              Card concluído: falta preencher <strong>{getDoneMissing(selectedItem).join(", ")}</strong>.
+                            </span>
+                          </div>
+                        )}
                         {/* Aviso sutil quando o card NÃO está na coluna Concluído */}
                         {!isCardDone && (
                           <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs flex items-center gap-2">
