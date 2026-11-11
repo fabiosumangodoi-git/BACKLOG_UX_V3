@@ -167,7 +167,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
     ];
 
     // V3.1: etapas finais saem do fluxo principal e viram abas próprias
-    const APP_VERSION = "v3.2";
+    const APP_VERSION = "v3.2.1";
     const FLOW_EXIT_STATUSES = ["Concluído", "Despriorizado"];
     // V3.1: campos da aba "Produção & Resultado" que ainda faltam num card concluído
     const getDoneMissing = (item) => {
@@ -7964,7 +7964,10 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
         const currentYear = new Date().getFullYear();
         const yearOf = (i) => {
           const m = /^(\d{4})-\d{2}-\d{2}$/.exec(i.productionDate || i.dataProducao || "");
-          return m && i.status === "Concluído" ? Number(m[1]) : currentYear;
+          if (!(m && i.status === "Concluído")) return currentYear;
+          // PI4 encerra sempre em janeiro: conclusão em janeiro pertence à PI4 do ano anterior
+          const month = Number(i.productionDate ? i.productionDate.slice(5, 7) : (i.dataProducao || "").slice(5, 7));
+          return i.pi === "PI4" && month === 1 ? Number(m[1]) - 1 : Number(m[1]);
         };
         const piItemsAll = items.filter(i => PI_CYCLE_OPTIONS.includes(i.pi));
         const yearsSet = Array.from(new Set(piItemsAll.map(yearOf))).sort((x, y) => y - x);
@@ -9210,7 +9213,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                 <div>
                   <div className="flex items-center gap-2">
                     <h1 className="text-lg font-bold text-slate-900">UX Ops & Backlog Hub</h1>
-                    <span title="Versão 3.2" className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">{APP_VERSION}</span>
+                    <span title="Versão 3.2.1" className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">{APP_VERSION}</span>
                     <span title={SYNC_LABEL[syncState]} aria-label={SYNC_LABEL[syncState]} role="status" className={`inline-flex items-center cursor-help ${syncState === "error" ? "text-rose-600" : syncState === "online" ? "text-emerald-600" : "text-slate-400"}`}>
                       <MIcon name={SYNC_ICON[syncState] || "cloud_done"} className="text-[20px]" />
                     </span>
