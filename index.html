@@ -167,7 +167,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
     ];
 
     // V3.1: etapas finais saem do fluxo principal e viram abas próprias
-    const APP_VERSION = "v3.1";
+    const APP_VERSION = "v3.2";
     const FLOW_EXIT_STATUSES = ["Concluído", "Despriorizado"];
     // V3.1: campos da aba "Produção & Resultado" que ainda faltam num card concluído
     const getDoneMissing = (item) => {
@@ -317,6 +317,93 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
       if (normalized === "melhoria") return "#10B981";
       return "transparent";
     }
+
+    // Campo select padronizado (drawer)
+    const FIELD_CLS = "w-full text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 hover:border-slate-300 focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none";
+    const SelectField = ({ label, value, options, labels = {}, onChange }) => (
+      <div>
+        <label className="text-[11px] font-medium text-slate-500 block mb-1">{label}</label>
+        <div className="relative">
+          <select value={value} onChange={e => onChange(e.target.value)} className={FIELD_CLS + " appearance-none pr-8 cursor-pointer"}>
+            {options.map(o => <option key={o} value={o}>{labels[o] || o}</option>)}
+          </select>
+          <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none flex"><MIcon name="expand_more" className="text-[18px]" /></span>
+        </div>
+      </div>
+    );
+    const MultiSelectField = ({ label, options, labels = {}, selected, onToggle }) => {
+      const [open, setOpen] = useState(false);
+      const text = selected.length === 0 ? "Selecionar..." : selected.map(o => labels[o] || o).join(", ");
+      return (
+        <div className="relative">
+          <label className="text-[11px] font-medium text-slate-500 block mb-1">{label}</label>
+          <button type="button" onClick={() => setOpen(o => !o)} aria-haspopup="listbox" aria-expanded={open} className={FIELD_CLS + " text-left flex items-center justify-between gap-2"}>
+            <span className={`truncate ${selected.length === 0 ? "text-slate-400 font-medium" : ""}`}>{text}</span>
+            <MIcon name="expand_more" className={`text-[18px] text-slate-400 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+          </button>
+          {open && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setOpen(false)}></div>
+              <div role="listbox" aria-multiselectable="true" className="absolute left-0 right-0 top-full mt-2 max-h-[260px] overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-xl z-50 p-1.5">
+                {options.map(o => {
+                  const on = selected.includes(o);
+                  return (
+                    <button key={o} type="button" role="option" aria-selected={on} onClick={() => onToggle(o)} className={`w-full text-left text-xs font-semibold px-3 py-2 rounded-lg flex items-center justify-between gap-3 ${on ? "bg-indigo-50 text-indigo-700" : "text-slate-700 hover:bg-slate-50"}`}>
+                      <span>{labels[o] || o}</span>
+                      {on && <MIcon name="check" className="text-[16px]" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      );
+    };
+
+    // Filtro dropdown (header)
+    const FilterDropdown = ({ label, value, allValue, options, onChange }) => {
+      const [open, setOpen] = useState(false);
+      const active = value !== allValue;
+      return (
+        <div className="relative">
+          <button
+            onClick={() => setOpen(o => !o)}
+            aria-haspopup="listbox"
+            aria-expanded={open}
+            title={"Filtrar por " + label}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition flex items-center gap-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 ${
+              active ? "bg-indigo-50 text-indigo-700 border-indigo-200" : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+            }`}
+          >
+            <span className="font-medium text-slate-500">{label}:</span>
+            <span>{value}</span>
+            <MIcon name="expand_more" className={`text-[16px] transition-transform ${open ? "rotate-180" : ""}`} />
+          </button>
+          {open && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setOpen(false)}></div>
+              <div role="listbox" className="absolute left-0 top-full mt-2 min-w-[160px] max-h-[320px] overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-xl z-50 p-1.5">
+                {options.map(opt => (
+                  <button
+                    key={opt}
+                    role="option"
+                    aria-selected={opt === value}
+                    onClick={() => { onChange(opt); setOpen(false); }}
+                    className={`w-full text-left text-xs font-semibold px-3 py-2 rounded-lg flex items-center justify-between gap-3 ${
+                      opt === value ? "bg-indigo-50 text-indigo-700" : "text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    <span>{opt}</span>
+                    {opt === value && <MIcon name="check" className="text-[16px]" />}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      );
+    };
 
     const SYNC_LABEL = {
       local: "Salvo no navegador",
@@ -8412,6 +8499,22 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
         () => items.find(i => String(i.id) === String(selectedId)) || null,
         [items, selectedId]
       );
+      // Busca global (header): varre todos os campos de todos os cards, sem acento
+      const [searchOpen, setSearchOpen] = useState(false);
+      const [userMenuOpen, setUserMenuOpen] = useState(false);
+      const normTxt = (t) => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      const searchIndex = useMemo(() => items.map(i => ({ i, blob: normTxt(Object.values(i).map(v => typeof v === "object" ? JSON.stringify(v) : v).join(" ")) })), [items]);
+      const globalResults = useMemo(() => {
+        const q = normTxt(searchQuery).trim();
+        if (!q) return [];
+        return searchIndex.filter(x => x.blob.includes(q)).map(x => x.i);
+      }, [searchIndex, searchQuery]);
+      const openFromSearch = (item) => {
+        const tab = Object.keys(TAB_STATUSES).find(t => TAB_STATUSES[t].includes(item.status)) || "Fluxo";
+        setActiveTab(tab);
+        setSelectedItem(item);
+        setSearchOpen(false);
+      };
       const setSelectedItem = (item) => {
         setSelectedId(item ? item.id : null);
         setEditingCommentId(null);
@@ -9107,10 +9210,9 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                 <div>
                   <div className="flex items-center gap-2">
                     <h1 className="text-lg font-bold text-slate-900">UX Ops & Backlog Hub</h1>
-                    <span title="Versão 3.1" className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">{APP_VERSION}</span>
-                    <span className="text-xs font-medium px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 inline-flex items-center gap-1">
-                      <MIcon name={SYNC_ICON[syncState] || "cloud_done"} className="text-[14px]" />
-                      <span>{SYNC_LABEL[syncState]}</span>
+                    <span title="Versão 3.2" className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">{APP_VERSION}</span>
+                    <span title={SYNC_LABEL[syncState]} aria-label={SYNC_LABEL[syncState]} role="status" className={`inline-flex items-center cursor-help ${syncState === "error" ? "text-rose-600" : syncState === "online" ? "text-emerald-600" : "text-slate-400"}`}>
+                      <MIcon name={SYNC_ICON[syncState] || "cloud_done"} className="text-[20px]" />
                     </span>
                   </div>
                   <p className="text-xs text-slate-500">
@@ -9119,51 +9221,106 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                 </div>
               </div>
 
+              {/* BUSCA GLOBAL */}
+              <div className="relative flex-1 min-w-[280px] max-w-2xl order-last lg:order-none">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-indigo-600 flex items-center pointer-events-none">
+                  <MIcon name="search" className="text-[22px]" />
+                </span>
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={e => { setSearchQuery(e.target.value); setSearchOpen(true); }}
+                  onFocus={() => setSearchOpen(true)}
+                  onBlur={() => setTimeout(() => setSearchOpen(false), 150)}
+                  onKeyDown={e => { if (e.key === "Escape") { setSearchQuery(""); setSearchOpen(false); e.target.blur(); } if (e.key === "Enter" && globalResults[0]) openFromSearch(globalResults[0]); }}
+                  placeholder="Buscar em toda a plataforma: código Jira, título, descrição, owner, PI..."
+                  className="w-full pl-12 pr-10 py-3 text-sm bg-white border-2 border-indigo-200 rounded-2xl shadow-sm focus:outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/15"
+                />
+                {searchQuery && (
+                  <button title="Limpar busca (Esc)" aria-label="Limpar busca" onClick={() => setSearchQuery("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 flex items-center">
+                    <MIcon name="close" className="text-[18px]" />
+                  </button>
+                )}
+                {searchOpen && searchQuery.trim() && (
+                  <div className="absolute left-0 right-0 top-full mt-2 bg-white border border-slate-200 rounded-2xl shadow-xl max-h-[420px] overflow-y-auto z-50">
+                    <div className="px-4 py-2 text-xs text-slate-500 border-b border-slate-100">{globalResults.length} resultado(s)</div>
+                    {globalResults.length === 0 && <div className="px-4 py-6 text-sm text-slate-500 text-center">Nada encontrado</div>}
+                    {globalResults.slice(0, 20).map(it => (
+                      <button key={it.id} onMouseDown={e => e.preventDefault()} onClick={() => openFromSearch(it)} className="w-full text-left px-4 py-2.5 hover:bg-indigo-50 flex items-center gap-3 border-b border-slate-50">
+                        <span className="text-xs font-bold text-indigo-600 shrink-0">{it.jira}</span>
+                        <span className="text-sm text-slate-800 truncate flex-1">{it.title}</span>
+                        <span className="text-[11px] text-slate-500 shrink-0">{it.status}</span>
+                      </button>
+                    ))}
+                    {globalResults.length > 20 && <div className="px-4 py-2 text-xs text-slate-400">Mostrando 20 de {globalResults.length}. Refine a busca.</div>}
+                  </div>
+                )}
+              </div>
+
               {/* Botões de ação: Nova Iniciativa, usuário logado e sair */}
               <div className="flex items-center gap-3">
                 <button
                   onClick={() => setIsNewModalOpen(true)}
+                  title="Criar nova iniciativa no backlog"
                   className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-sm transition flex items-center gap-1.5"
                 >
                   <MIcon name="add" className="text-[16px]" />
                   <span>Nova Iniciativa</span>
                 </button>
                 {currentUser && (
-                  <span className="text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 px-3 py-2.5 rounded-xl flex items-center gap-1.5">
-                    <MIcon name="account_circle" className="text-[16px]" />
-                    <span>Logado: {currentUser}</span>
-                  </span>
-                )}
-                {onSignOut && (
-                  <button
-                    onClick={onSignOut}
-                    className="text-xs font-semibold text-slate-600 hover:text-slate-900 px-3 py-2.5 rounded-xl border border-slate-200 bg-white flex items-center gap-1"
-                  >
-                    <MIcon name="logout" className="text-[15px]" />
-                    <span>Trocar usuário / Sair</span>
-                  </button>
+                  <div className="relative">
+                    <button
+                      onClick={() => setUserMenuOpen(o => !o)}
+                      title="Menu do usuário"
+                      aria-haspopup="menu"
+                      aria-expanded={userMenuOpen}
+                      className="text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-3 py-2.5 rounded-xl flex items-center gap-1.5 transition focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                    >
+                      <MIcon name="account_circle" className="text-[16px]" />
+                      <span>{currentUser}</span>
+                      <MIcon name="expand_more" className={`text-[16px] transition-transform ${userMenuOpen ? "rotate-180" : ""}`} />
+                    </button>
+                    {userMenuOpen && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setUserMenuOpen(false)}></div>
+                        <div role="menu" className="absolute right-0 top-full mt-2 w-56 bg-white border border-slate-200 rounded-xl shadow-xl z-50 p-1.5">
+                          <div className="px-3 py-2 text-[11px] text-slate-500 border-b border-slate-100 mb-1">Logado como <span className="font-bold text-slate-800">{currentUser}</span></div>
+                          {onSignOut && (
+                            <button
+                              role="menuitem"
+                              onClick={() => { setUserMenuOpen(false); onSignOut(); }}
+                              className="w-full text-left text-xs font-semibold text-slate-700 hover:bg-slate-50 px-3 py-2 rounded-lg flex items-center gap-2"
+                            >
+                              <MIcon name="logout" className="text-[16px]" />
+                              <span>Trocar usuário / Sair</span>
+                            </button>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
                 )}
               </div>
 
               {/* Indicadores rápidos + navegação por abas */}
               <div className="flex items-center gap-4">
                 <div className="hidden 2xl:flex items-center gap-4 bg-slate-50 px-3.5 py-1.5 rounded-xl border border-slate-200/80 text-xs">
-                  <div>
+                  <div title="Cards prontos para desenvolvimento" className="cursor-help">
                     <span className="text-[10px] uppercase text-blue-600 font-bold block">Pronto DEV</span>
                     <span className="font-bold text-slate-800">{stats.readyForDev}</span>
                   </div>
                   <div className="h-5 w-px bg-slate-200"></div>
-                  <div>
+                  <div title="Testes A/B rodando no VWO" className="cursor-help">
                     <span className="text-[10px] uppercase text-emerald-600 font-bold block">VWO</span>
                     <span className="font-bold text-slate-800">{stats.vwoLive}</span>
                   </div>
                   <div className="h-5 w-px bg-slate-200"></div>
-                  <div>
+                  <div title="Cards com impedimento" className="cursor-help">
                     <span className="text-[10px] uppercase text-rose-600 font-bold block">Impedimentos</span>
                     <span className="font-bold text-slate-800">{stats.blocked}</span>
                   </div>
                   <div className="h-5 w-px bg-slate-200"></div>
-                  <div>
+                  <div title="Cards concluídos" className="cursor-help">
                     <span className="text-[10px] uppercase text-teal-600 font-bold block">Concluídos</span>
                     <span className="font-bold text-slate-800">{stats.completed}</span>
                   </div>
@@ -9181,6 +9338,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                   return (
                     <button
                       key={t.id}
+                      title={{ Fluxo: "Quadro com todas as colunas do fluxo", "Concluídos": "Repositório de iniciativas concluídas", Despriorizados: "Iniciativas despriorizadas", Dashboard: "Indicadores e evolução do backlog" }[t.id]}
                       onClick={() => setActiveTab(t.id)}
                       className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2 ${
                         activeTab === t.id
@@ -9203,123 +9361,18 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
               </div>
               </div>
             </div>
-          </header>
-
-          {/* BARRA DE FILTROS (EXIBIDA NA ABA "TODOS") */}
-          {(activeTab === "Fluxo" || activeTab === "Despriorizados") && (
-            <section className="bg-white/70 backdrop-blur border-b border-slate-200/80">
-              <div className="max-w-[1600px] mx-auto px-6 py-2.5 flex flex-wrap items-center justify-between gap-4">
-                {/* Busca */}
-                <div className="relative flex-1 min-w-[240px] max-w-md">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 flex items-center pointer-events-none">
-                    <MIcon name="search" className="text-[16px]" />
-                  </span>
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
-                    placeholder="Buscar por código Jira (ex: AGDE-4220), título ou descrição..."
-                    className="w-full pl-9 pr-8 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                  />
-                  {searchQuery && (
-                    <button
-                      onClick={() => setSearchQuery("")}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 flex items-center"
-                    >
-                      <MIcon name="close" className="text-[15px]" />
-                    </button>
-                  )}
-                </div>
-
-                {/* Filtros rápidos: PI, Owner, Classificação e Atuação */}
-                <div className="flex flex-wrap items-center gap-3">
-                  <div className="flex items-center gap-1">
-                    <span className="text-xs font-medium text-slate-500 mr-1">PI:</span>
-                    {["Todos", ...PI_OPTIONS].map(pi => (
-                      <button
-                        key={pi}
-                        onClick={() => setSelectedPIFilter(pi)}
-                        className={`px-2 py-1 rounded-md text-xs font-semibold transition ${
-                          selectedPIFilter === pi
-                            ? "bg-indigo-600 text-white"
-                            : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
-                        }`}
-                      >
-                        {pi}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="h-4 w-px bg-slate-200 hidden sm:block"></div>
-
-                  <div className="flex items-center gap-1">
-                    <span className="text-xs font-medium text-slate-500 mr-1">Owner:</span>
-                    {["Todos", ...OWNERS_ALL].map(owner => (
-                      <button
-                        key={owner}
-                        onClick={() => setSelectedOwner(owner)}
-                        className={`px-2 py-1 rounded-md text-xs font-semibold transition ${
-                          selectedOwner === owner
-                            ? "bg-slate-900 text-white"
-                            : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
-                        }`}
-                      >
-                        {owner}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="h-4 w-px bg-slate-200 hidden sm:block"></div>
-
-                  <div className="flex items-center gap-1">
-                    <span className="text-xs font-medium text-slate-500 mr-1">Classificação:</span>
-                    {["Todas", ...TYPE_OPTIONS].map(typeOpt => {
-                      const isSelected = selectedTypeFilter === typeOpt;
-                      const activeStyle =
-                        typeOpt === "Todas"
-                          ? "bg-slate-900 text-white border-slate-900"
-                          : TYPE_ACTIVE_BUTTON[typeOpt] || "bg-indigo-600 text-white";
-                      const inactiveStyle =
-                        typeOpt === "Todas"
-                          ? "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                          : `${TYPE_BADGE[typeOpt]} opacity-85 hover:opacity-100`;
-                      return (
-                        <button
-                          key={typeOpt}
-                          onClick={() => setSelectedTypeFilter(typeOpt)}
-                          className={`px-2 py-1 rounded-md text-xs font-semibold border transition ${
-                            isSelected ? activeStyle : inactiveStyle
-                          }`}
-                        >
-                          {typeOpt}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <div className="h-4 w-px bg-slate-200 hidden sm:block"></div>
-
-                  <div className="flex items-center gap-1">
-                    <span className="text-xs font-medium text-slate-500 mr-1">Atuação:</span>
-                    {["Todas", "UP", "DOWN", "UP e DOWN"].map(stream => (
-                      <button
-                        key={stream}
-                        onClick={() => setSelectedStream(stream)}
-                        className={`px-2 py-1 rounded-md text-xs font-semibold transition ${
-                          selectedStream === stream
-                            ? "bg-indigo-600 text-white"
-                            : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
-                        }`}
-                      >
-                        {stream}
-                      </button>
-                    ))}
-                  </div>
-
+            {(activeTab === "Fluxo" || activeTab === "Despriorizados") && (
+              <div className="border-t border-slate-100 bg-slate-50/60">
+                <div className="max-w-[1600px] mx-auto px-6 py-2 flex flex-wrap items-center gap-2">
+                  <MIcon name="filter_list" className="text-[16px] text-slate-400" />
+                  <FilterDropdown label="PI" value={selectedPIFilter} allValue="Todos" options={["Todos", ...PI_OPTIONS]} onChange={setSelectedPIFilter} />
+                  <FilterDropdown label="Owner" value={selectedOwner} allValue="Todos" options={["Todos", ...OWNERS_ALL]} onChange={setSelectedOwner} />
+                  <FilterDropdown label="Classificação" value={selectedTypeFilter} allValue="Todas" options={["Todas", ...TYPE_OPTIONS]} onChange={setSelectedTypeFilter} />
+                  <FilterDropdown label="Atuação" value={selectedStream} allValue="Todas" options={["Todas", "UP", "DOWN", "UP e DOWN"]} onChange={setSelectedStream} />
                   {filtersActive && (
                     <button
                       onClick={clearFilters}
-                      className="ml-2 px-2.5 py-1 rounded-md text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300 hover:bg-amber-100 transition flex items-center gap-1"
+                      className="px-2.5 py-1 rounded-md text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300 hover:bg-amber-100 transition flex items-center gap-1"
                     >
                       <MIcon name="filter_alt_off" className="text-[14px]" />
                       <span>Limpar filtros</span>
@@ -9327,8 +9380,8 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                   )}
                 </div>
               </div>
-            </section>
-          )}
+            )}
+          </header>
 
           {/* CONTEÚDO PRINCIPAL */}
           <main className="flex-1 max-w-[1600px] w-full mx-auto px-6 py-5">
@@ -9386,13 +9439,15 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                     return null;
                   }
 
+                  const collapsed = !singleColumn && colItems.length === 0 && dragOverStatus !== status;
                   return (
                     <div
                       key={status}
                       data-status={status}
+                      title={collapsed ? `${status}: nenhum item (arraste um card aqui)` : undefined}
                       onDragOver={e => handleDragOverColumn(e, status)}
                       onDrop={e => handleDropOnColumn(e, status)}
-                      className={`${singleColumn ? "w-full" : "w-72 flex-shrink-0"} flex flex-col rounded-2xl border transition-all duration-200 ${
+                      className={`${singleColumn ? "w-full" : collapsed ? "w-12 flex-shrink-0" : "w-72 flex-shrink-0"} flex flex-col rounded-2xl border transition-all duration-200 ${
                         dragOverStatus === status
                           ? "bg-indigo-50/80 border-indigo-400 ring-2 ring-indigo-400/30"
                           : "bg-slate-100/70 border-slate-200/80"
@@ -9400,6 +9455,12 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                       style={{ maxHeight: "calc(100vh - 180px)" }}
                     >
                       {/* Cabeçalho da Coluna */}
+                      {collapsed ? (
+                        <div className="flex flex-col items-center gap-3 py-3.5 bg-white/50 rounded-2xl flex-1">
+                          <span className="text-[11px] font-bold text-slate-500 bg-white px-2 py-0.5 rounded-md border border-slate-200 shadow-sm">0</span>
+                          <h2 className="text-xs font-bold text-slate-500 tracking-wide uppercase whitespace-nowrap" style={{ writingMode: "vertical-rl" }}>{status}</h2>
+                        </div>
+                      ) : (<>
                       <div className="p-3.5 flex items-center justify-between border-b border-slate-200/60 bg-white/50 rounded-t-2xl">
                         <h2 className="text-xs font-bold text-slate-800 tracking-wide uppercase">
                           {status}
@@ -9572,6 +9633,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                           ))
                         )}
                       </div>
+                      </>)}
                     </div>
                   );
                 })}
@@ -9624,6 +9686,28 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                       </span>
                     </div>
 
+                    <div className="flex items-center gap-2 ml-auto">
+                      <span className="text-xs font-medium text-slate-600">Macrotemas</span>
+                      {(() => {
+                        const on = selectedItem.macrotemas === "sim" || selectedItem.macrotemas === true;
+                        return (
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={on}
+                            title="Esse item está em macrotemas?"
+                            onClick={() => persistCardNow({ ...selectedItem, macrotemas: on ? "nao" : "sim" })}
+                            className={`flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-full border text-xs font-semibold transition focus:outline-none focus:ring-2 focus:ring-indigo-500/30 ${on ? "bg-indigo-50 border-indigo-200 text-indigo-700" : "bg-slate-50 border-slate-200 text-slate-600"}`}
+                          >
+                            <span className={`w-8 h-[18px] rounded-full relative transition ${on ? "bg-indigo-600" : "bg-slate-300"}`}>
+                              <span className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-all ${on ? "left-[16px]" : "left-[2px]"}`}></span>
+                            </span>
+                            <span>{on ? "Sim" : "Não"}</span>
+                          </button>
+                        );
+                      })()}
+                    </div>
+
                     <div className="flex items-center gap-2">
                       {/* Botão de fechar (botão de excluir fica EXCLUSIVAMENTE no rodapé do drawer) */}
                       <button
@@ -9636,210 +9720,71 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                     </div>
                   </div>
 
-                  {/* Pergunta Macrotemas (com botões [Sim] e [Não]) */}
-                  <div className="mb-3">
-                    <label className="text-[11px] font-bold text-slate-500 block mb-1">
-                      Esse item está em macrotemas?
-                    </label>
-                    <div className="flex items-center gap-2">
-                      {[
-                        { value: "sim", label: "Sim" },
-                        { value: "nao", label: "Não" }
-                      ].map(opt => {
-                        const isSelected = (selectedItem.macrotemas === opt.value) || (opt.value === "sim" && selectedItem.macrotemas === true) || (opt.value === "nao" && selectedItem.macrotemas === false);
-                        return (
-                          <button
-                            key={opt.value}
-                            type="button"
-                            onClick={() => persistCardNow({ ...selectedItem, macrotemas: opt.value })}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                              isSelected
-                                ? "bg-indigo-600 text-white shadow-sm border border-indigo-600"
-                                : "bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200"
-                            }`}
-                          >
-                            {opt.label}
-                          </button>
-                        );
-                      })}
-                    </div>
+                  {/* Título editável (campo com fundo) */}
+                  <div className="mt-6">
+                    <label className="text-[11px] font-medium text-slate-500 block mb-1">Título</label>
+                    <textarea
+                      rows={2}
+                      value={selectedItem.title || ""}
+                      onChange={e => {
+                        updateItemField(selectedItem.id, "title", e.target.value);
+                        e.target.style.height = "auto";
+                        e.target.style.height = `${e.target.scrollHeight}px`;
+                      }}
+                      onBlur={e => persistCardNow({ ...selectedItem, title: e.target.value })}
+                      ref={el => { if (el) { el.style.height = "auto"; el.style.height = `${el.scrollHeight}px`; } }}
+                      className="w-full text-base font-bold text-slate-900 leading-snug bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 hover:border-slate-300 focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none resize-none overflow-hidden whitespace-normal break-words"
+                      style={{ resize: "none", overflow: "hidden" }}
+                    />
                   </div>
 
-                  {/* Título editável */}
-                  <textarea
-                    rows={2}
-                    value={selectedItem.title || ""}
-                    onChange={e => {
-                      updateItemField(selectedItem.id, "title", e.target.value);
-                      e.target.style.height = "auto";
-                      e.target.style.height = `${e.target.scrollHeight}px`;
-                    }}
-                    onBlur={e => persistCardNow({ ...selectedItem, title: e.target.value })}
-                    ref={el => {
-                      if (el) {
-                        el.style.height = "auto";
-                        el.style.height = `${el.scrollHeight}px`;
-                      }
-                    }}
-                    className="w-full text-base font-bold text-slate-900 leading-snug bg-transparent border-b border-transparent hover:border-slate-200 focus:border-indigo-500 focus:outline-none pb-1 resize-none whitespace-normal break-words"
-                    style={{
-                      whiteSpace: "normal",
-                      wordWrap: "break-word",
-                      overflowWrap: "break-word",
-                      resize: "none"
-                    }}
-                  />
+                  {/* Detalhamento */}
+                  <div className="mt-4">
+                    <label className="text-[11px] font-medium text-slate-500 block mb-1">Detalhamento</label>
+                    <textarea
+                      rows={3}
+                      value={selectedItem.description || ""}
+                      onChange={e => updateItemField(selectedItem.id, "description", e.target.value)}
+                      onBlur={e => persistCardNow({ ...selectedItem, description: e.target.value })}
+                      placeholder="Escopo e contexto, requisitos de design ou alinhamentos com a equipe..."
+                      className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 hover:border-slate-300 focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none resize-none"
+                    />
+                  </div>
 
-                  {/* Planejamento de Prazo & Sprints (Bloqueado em Backlog, Concluído e Despriorizado) */}
-                  {(() => {
-                    const locked = isPlanningLocked(selectedItem.status);
-                    return (
-                      <div className={`mt-3 p-3 rounded-xl border ${locked ? "bg-slate-50 border-slate-200 opacity-70" : "bg-purple-50/50 border-purple-100"}`}>
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                            Planejamento de Prazo &amp; Sprints
-                          </span>
-                          {locked && (
-                            <span className="text-[10px] font-semibold text-slate-400">
-                              (Bloqueado para esta coluna)
-                            </span>
-                          )}
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500 block mb-1">Data Início</label>
-                            <input
-                              type="date"
-                              disabled={locked}
-                              value={selectedItem.startDate || ""}
-                              onChange={e => persistCardNow({ ...selectedItem, startDate: e.target.value })}
-                              className="w-full text-xs font-semibold bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500 block mb-1">Data Fim</label>
-                            <input
-                              type="date"
-                              disabled={locked}
-                              min={selectedItem.startDate || undefined}
-                              value={selectedItem.endDate || ""}
-                              onChange={e => persistCardNow({ ...selectedItem, endDate: e.target.value })}
-                              className="w-full text-xs font-semibold bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500 block mb-1">Sprints</label>
-                            <select
-                              disabled={locked}
-                              value={selectedItem.sprints || ""}
-                              onChange={e => persistCardNow({ ...selectedItem, sprints: e.target.value })}
-                              className="w-full text-xs font-semibold bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
-                            >
-                              <option value="">Não informado</option>
-                              {SPRINT_OPTIONS.map(sp => (
-                                <option key={sp} value={sp}>{sp}</option>
-                              ))}
-                            </select>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  {/* Campo para Link do Card do Jira com botão Abrir e sincronização automática */}
-                  <div className="mt-3 bg-indigo-50/50 p-3 rounded-xl border border-indigo-100">
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="text-[10px] font-bold uppercase text-indigo-700">
-                        Código / Link Jira (ex: AGDE-4220)
-                      </label>
-                      {selectedItem.jiraUrl && (
-                        <a
-                          href={selectedItem.jiraUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 underline inline-flex items-center gap-0.5"
-                        >
-                          <span>Abrir no Jira</span>
-                          <MIcon name="open_in_new" className="text-[12px]" />
-                        </a>
-                      )}
-                    </div>
+                  {/* Jira: só o código; URL gerada automaticamente */}
+                  <div className="mt-4">
+                    <label className="text-[11px] font-medium text-slate-500 block mb-1">Jira</label>
                     <div className="flex items-center gap-2">
                       <input
                         type="text"
-                        placeholder="Número (ex: 4220)"
+                        placeholder="AGDE-0000"
                         value={selectedItem.jira || ""}
                         onChange={e => {
                           const rawVal = e.target.value;
                           const num = extractJiraNumber(rawVal);
                           if (num) {
-                            updateItemFields(selectedItem.id, {
-                              jira: `AGDE-${num}`,
-                              jiraUrl: `${JIRA_BROWSE_BASE}${num}`
-                            });
+                            updateItemFields(selectedItem.id, { jira: `AGDE-${num}`, jiraUrl: `${JIRA_BROWSE_BASE}${num}` });
                           } else {
-                            updateItemField(selectedItem.id, "jira", rawVal);
+                            updateItemFields(selectedItem.id, { jira: rawVal, jiraUrl: "" });
                           }
                         }}
                         onBlur={e => persistCardNow({ ...selectedItem, jira: e.target.value })}
-                        className="w-32 text-xs font-bold text-indigo-700 bg-white border border-indigo-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500"
+                        className="w-40 text-xs font-bold text-indigo-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 hover:border-slate-300 focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
                       />
-                      <input
-                        type="url"
-                        placeholder="https://digitalfleury.atlassian.net/browse/AGDE-XXXX"
-                        value={selectedItem.jiraUrl || ""}
-                        onChange={e => handleJiraUrl(selectedItem.id, e.target.value)}
-                        onBlur={e => persistCardNow({ ...selectedItem, jiraUrl: e.target.value })}
-                        className="flex-1 text-xs bg-white border border-indigo-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Seletores rápidos: Coluna (Status), PI e Marca */}
-                  <div className="grid grid-cols-3 gap-3 mt-4 pt-4 border-t border-slate-100">
-                    <div>
-                      <label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">
-                        Coluna / Status Atual
-                      </label>
-                      <select
-                        value={selectedItem.status}
-                        onChange={e => moveCardStatus(selectedItem.id, e.target.value)}
-                        className="w-full text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500"
-                      >
-                        {STATUS_LIST.map(s => (
-                          <option key={s} value={s}>{s}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">
-                        Program Increment (PI)
-                      </label>
-                      <select
-                        value={PI_OPTIONS.includes(selectedItem.pi) ? selectedItem.pi : "Backlog"}
-                        onChange={e => updateItemField(selectedItem.id, "pi", e.target.value, true)}
-                        className="w-full text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500"
-                      >
-                        {PI_OPTIONS.map(p => (
-                          <option key={p} value={p}>{p}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">
-                        Marca (Seleção Única)
-                      </label>
-                      <select
-                        value={selectedItem.brand || "Todas"}
-                        onChange={e => updateItemField(selectedItem.id, "brand", e.target.value, true)}
-                        className="w-full text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500"
-                      >
-                        {BRAND_OPTIONS.map(b => (
-                          <option key={b} value={b}>{b}</option>
-                        ))}
-                      </select>
+                      {selectedItem.jiraUrl ? (
+                        <a
+                          href={selectedItem.jiraUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Abrir card no Jira"
+                          className="text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-3 py-2 rounded-lg inline-flex items-center gap-1.5 transition"
+                        >
+                          <MIcon name="open_in_new" className="text-[16px]" />
+                          <span>Abrir no Jira</span>
+                        </a>
+                      ) : (
+                        <span className="text-xs text-slate-400">Informe o código para gerar o link</span>
+                      )}
                     </div>
                   </div>
 
@@ -9852,7 +9797,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                       }`}
                     >
                       <MIcon name="assignment" className="text-[15px]" />
-                      <span>Escopo & Detalhamento</span>
+                      <span>Detalhamento</span>
                     </button>
                     <button
                       onClick={() => setDrawerTab("timeline")}
@@ -9861,7 +9806,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                       }`}
                     >
                       <MIcon name="forum" className="text-[15px]" />
-                      <span>Observações & Histórico ({selectedItem.comments?.length || 0})</span>
+                      <span>Comentários e observações ({selectedItem.comments?.length || 0})</span>
                     </button>
                     <button
                       onClick={() => setDrawerTab("resultados")}
@@ -9870,7 +9815,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                       }`}
                     >
                       <MIcon name="trending_up" className="text-[15px]" />
-                      <span>Produção & Resultado</span>
+                      <span>Finalizado e concluído</span>
                       {getDoneMissing(selectedItem).length > 0 && (
                         <span
                           title={`Falta preencher: ${getDoneMissing(selectedItem).join(", ")}`}
@@ -9887,169 +9832,20 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                 <div className="p-6 overflow-y-auto flex-1 space-y-5 custom-scrollbar">
                   {drawerTab === "escopo" && (
                     <div className="space-y-5">
-                      {/* Classificação (Discovery, História, Melhoria) & Tipo de Atuação (UP, DOWN, UP e DOWN) */}
+                      {/* Campos em dropdown (padrão único) */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/80">
-                          <label className="text-[11px] font-bold text-slate-500 block mb-2">
-                            Classificação do Item
-                          </label>
-                          <div className="flex gap-1.5">
-                            {TYPE_OPTIONS.map(t => {
-                              const active = selectedItem.type === t;
-                              return (
-                                <button
-                                  key={t}
-                                  type="button"
-                                  onClick={() => updateItemField(selectedItem.id, "type", t, true)}
-                                  className={`flex-1 py-1.5 px-2.5 rounded-lg text-xs font-bold border transition ${
-                                    active
-                                      ? TYPE_ACTIVE_BUTTON[t] || "bg-indigo-600 text-white border-indigo-600 shadow-sm"
-                                      : `${TYPE_BADGE[t] || "bg-white text-slate-600 border-slate-200"} opacity-70 hover:opacity-100`
-                                  }`}
-                                >
-                                  {t}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-
-                        <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/80">
-                          <label className="text-[11px] font-bold text-slate-500 block mb-2">
-                            Tipo de Atuação
-                          </label>
-                          <div className="flex gap-1.5">
-                            {STREAM_OPTIONS.map(st => {
-                              const active = selectedItem.stream === st.value;
-                              return (
-                                <button
-                                  key={st.value}
-                                  type="button"
-                                  onClick={() => updateItemField(selectedItem.id, "stream", st.value, true)}
-                                  className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold border transition ${
-                                    active
-                                      ? "bg-slate-900 text-white border-slate-900 shadow-sm"
-                                      : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
-                                  }`}
-                                >
-                                  {st.label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
+                        <SelectField label="Coluna / Status atual" value={selectedItem.status} options={STATUS_LIST} onChange={v => moveCardStatus(selectedItem.id, v)} />
+                        <SelectField label="PI de atuação" value={PI_OPTIONS.includes(selectedItem.pi) ? selectedItem.pi : "Backlog"} options={PI_OPTIONS} onChange={v => updateItemField(selectedItem.id, "pi", v, true)} />
+                        <SelectField label="Marca" value={selectedItem.brand || "Todas"} options={BRAND_OPTIONS} onChange={v => updateItemField(selectedItem.id, "brand", v, true)} />
+                        <SelectField label="Classificação do item" value={selectedItem.type} options={TYPE_OPTIONS} onChange={v => updateItemField(selectedItem.id, "type", v, true)} />
+                        <SelectField label="Tipo de atuação" value={selectedItem.stream} options={STREAM_OPTIONS.map(o => o.value)} labels={Object.fromEntries(STREAM_OPTIONS.map(o => [o.value, o.label]))} onChange={v => updateItemField(selectedItem.id, "stream", v, true)} />
+                        <MultiSelectField label="Designers responsáveis (owners)" options={OWNERS_ALL} labels={OWNER_NAMES} selected={selectedItem.owners || []} onToggle={o => toggleArrayItem(selectedItem.id, "owners", o)} />
+                        <MultiSelectField label="Jornadas impactadas" options={JOURNEY_OPTIONS} selected={selectedItem.journeys || []} onToggle={o => toggleArrayItem(selectedItem.id, "journeys", o)} />
+                        <MultiSelectField label="Métricas-alvo / indicadores" options={METRIC_OPTIONS} selected={selectedItem.metrics || []} onToggle={o => toggleArrayItem(selectedItem.id, "metrics", o)} />
                       </div>
 
-                      {/* Detalhamento do Item */}
-                      <div>
-                        <label className="text-xs font-bold text-slate-700 block mb-1">
-                          Detalhamento do Item (Escopo e contexto)
-                        </label>
-                        <textarea
-                          rows={4}
-                          value={selectedItem.description}
-                          onChange={e => updateItemField(selectedItem.id, "description", e.target.value)}
-                          onBlur={e => persistCardNow({ ...selectedItem, description: e.target.value })}
-                          placeholder="Insira os detalhes técnicos, requisitos de design ou alinhamentos com a equipe..."
-                          className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-indigo-500"
-                        />
-                      </div>
+                  
 
-                      {/* Responsáveis / Owners (Seleção Múltipla com Pílulas) */}
-                      <div>
-                        <div className="flex items-center justify-between mb-1.5">
-                          <label className="text-xs font-bold text-slate-700">
-                            Designers Responsáveis (Owners)
-                          </label>
-                          <span className="text-[11px] text-slate-400">
-                            {(selectedItem.owners || []).length} selecionado(s)
-                          </span>
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {OWNERS_ALL.map(owner => {
-                            const active = (selectedItem.owners || []).includes(owner);
-                            return (
-                              <button
-                                key={owner}
-                                type="button"
-                                onClick={() => toggleArrayItem(selectedItem.id, "owners", owner)}
-                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 border ${
-                                  active
-                                    ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
-                                    : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
-                                }`}
-                              >
-                                <span>{OWNER_NAMES[owner] || owner}</span>
-                                {active && <MIcon name="check" className="text-[14px]" />}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {/* Jornadas Impactadas */}
-                      <div>
-                        <div className="flex items-center justify-between mb-1.5">
-                          <label className="text-xs font-bold text-slate-700">
-                            Jornadas Impactadas
-                          </label>
-                          <span className="text-[11px] text-slate-400">
-                            {(selectedItem.journeys || []).length} selecionada(s)
-                          </span>
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {JOURNEY_OPTIONS.map(j => {
-                            const active = (selectedItem.journeys || []).includes(j);
-                            return (
-                              <button
-                                key={j}
-                                type="button"
-                                onClick={() => toggleArrayItem(selectedItem.id, "journeys", j)}
-                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 border ${
-                                  active
-                                    ? "bg-teal-600 text-white border-teal-600 shadow-sm"
-                                    : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
-                                }`}
-                              >
-                                <span>{j}</span>
-                                {active && <MIcon name="check" className="text-[14px]" />}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {/* Métricas-Alvo */}
-                      <div>
-                        <div className="flex items-center justify-between mb-1.5">
-                          <label className="text-xs font-bold text-slate-700">
-                            Métricas-Alvo / Indicadores
-                          </label>
-                          <span className="text-[11px] text-slate-400">
-                            {(selectedItem.metrics || []).length} selecionada(s)
-                          </span>
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {METRIC_OPTIONS.map(m => {
-                            const active = (selectedItem.metrics || []).includes(m);
-                            return (
-                              <button
-                                key={m}
-                                type="button"
-                                onClick={() => toggleArrayItem(selectedItem.id, "metrics", m)}
-                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 border ${
-                                  active
-                                    ? "bg-purple-600 text-white border-purple-600 shadow-sm"
-                                    : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
-                                }`}
-                              >
-                                <span>{m}</span>
-                                {active && <MIcon name="check" className="text-[14px]" />}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
 
                       {/* Motivo da despriorização */}
                       {selectedItem.status === "Despriorizado" && (
