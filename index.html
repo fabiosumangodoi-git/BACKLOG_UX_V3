@@ -167,7 +167,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
     ];
 
     // V3.1: etapas finais saem do fluxo principal e viram abas próprias
-    const APP_VERSION = "v3.2.1";
+    const APP_VERSION = "v3.2.2";
     const FLOW_EXIT_STATUSES = ["Concluído", "Despriorizado"];
     // V3.1: campos da aba "Produção & Resultado" que ainda faltam num card concluído
     const getDoneMissing = (item) => {
@@ -9213,7 +9213,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                 <div>
                   <div className="flex items-center gap-2">
                     <h1 className="text-lg font-bold text-slate-900">UX Ops & Backlog Hub</h1>
-                    <span title="Versão 3.2.1" className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">{APP_VERSION}</span>
+                    <span title="Versão 3.2.2" className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">{APP_VERSION}</span>
                     <span title={SYNC_LABEL[syncState]} aria-label={SYNC_LABEL[syncState]} role="status" className={`inline-flex items-center cursor-help ${syncState === "error" ? "text-rose-600" : syncState === "online" ? "text-emerald-600" : "text-slate-400"}`}>
                       <MIcon name={SYNC_ICON[syncState] || "cloud_done"} className="text-[20px]" />
                     </span>
@@ -9571,27 +9571,6 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                                   {item.stream}
                                 </span>
                               </div>
-
-                              {/* 3. Sprints e Semáforo de Prazo (Aparecem apenas fora de Backlog, Concluído e Despriorizado) */}
-                              {!isPlanningLocked(item.status) && (
-                                <div className="flex flex-wrap items-center gap-1.5 mb-2">
-                                  {item.sprints && (
-                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded border bg-purple-50 text-purple-700 border-purple-200">
-                                      {item.sprints}
-                                    </span>
-                                  )}
-                                  {(() => {
-                                    const d = getDeadlineInfo(item.endDate);
-                                    if (!d) return null;
-                                    return (
-                                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded border inline-flex items-center gap-1 ${d.cls}`}>
-                                        <span className={`w-1.5 h-1.5 rounded-full ${d.dot}`} />
-                                        <span>{d.label}</span>
-                                      </span>
-                                    );
-                                  })()}
-                                </div>
-                              )}
 
                               {/* 4. Título do Card */}
                               <h3 className="text-xs font-semibold text-slate-900 group-hover:text-indigo-600 transition line-clamp-2 mb-1.5">
