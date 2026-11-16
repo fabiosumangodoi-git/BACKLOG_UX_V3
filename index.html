@@ -161,13 +161,14 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
       "VWO teste",
       "Pronto pra dev",
       "Em desenvolvimento",
+      "Validação CRO",
       "Concluído",
       "Impedimento",
       "Despriorizado"
     ];
 
     // V3.1: etapas finais saem do fluxo principal e viram abas próprias
-    const APP_VERSION = "v3.2.2";
+    const APP_VERSION = "v3.3";
     const FLOW_EXIT_STATUSES = ["Concluído", "Despriorizado"];
     // V3.1: campos da aba "Produção & Resultado" que ainda faltam num card concluído
     const getDoneMissing = (item) => {
@@ -233,6 +234,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
       "VWO teste": "bg-emerald-50 text-emerald-700 border-emerald-200 ring-emerald-500/20",
       "Pronto pra dev": "bg-blue-50 text-blue-700 border-blue-200 ring-blue-500/20",
       "Em desenvolvimento": "bg-indigo-50 text-indigo-700 border-indigo-200 ring-indigo-500/20",
+      "Validação CRO": "bg-orange-50 text-orange-700 border-orange-200 ring-orange-500/20",
       "Concluído": "bg-teal-50 text-teal-700 border-teal-200 ring-teal-500/20",
       "Impedimento": "bg-rose-50 text-rose-700 border-rose-200 ring-rose-500/20",
       "Despriorizado": "bg-slate-100 text-slate-500 border-slate-200 ring-slate-500/20"
@@ -248,6 +250,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
       "VWO teste": "#059669",
       "Pronto pra dev": "#2563EB",
       "Em desenvolvimento": "#4F46E5",
+      "Validação CRO": "#EA580C",
       "Concluído": "#0D9488",
       "Impedimento": "#E11D48",
       "Despriorizado": "#94A3B8"
@@ -9213,7 +9216,7 @@ Consulte ARCHITECTURE_RULES.md para detalhes.
                 <div>
                   <div className="flex items-center gap-2">
                     <h1 className="text-lg font-bold text-slate-900">UX Ops & Backlog Hub</h1>
-                    <span title="Versão 3.2.2" className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">{APP_VERSION}</span>
+                    <span title="Versão 3.3" className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">{APP_VERSION}</span>
                     <span title={SYNC_LABEL[syncState]} aria-label={SYNC_LABEL[syncState]} role="status" className={`inline-flex items-center cursor-help ${syncState === "error" ? "text-rose-600" : syncState === "online" ? "text-emerald-600" : "text-slate-400"}`}>
                       <MIcon name={SYNC_ICON[syncState] || "cloud_done"} className="text-[20px]" />
                     </span>
